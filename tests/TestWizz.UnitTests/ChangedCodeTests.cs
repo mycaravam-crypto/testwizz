@@ -50,6 +50,22 @@ public sealed class ChangedCodeTests
         Assert.Contains("--since", stderr.ToString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void BatchRequiresSinceAndRejectsAmbiguousFlags()
+    {
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+        var app = new TestWizz.Cli.CliApp(stdout, stderr, Path.GetTempPath());
+
+        Assert.Equal(TestWizz.Cli.ExitCodes.Error,
+            app.Run(["generate", "--all-changed"], TestContext.Current.CancellationToken));
+        Assert.Contains("--since", stderr.ToString(), StringComparison.Ordinal);
+
+        Assert.Equal(TestWizz.Cli.ExitCodes.Error,
+            app.Run(["generate", "--since", "HEAD~1", "--all-changed", "--for", "Demo.B"],
+                TestContext.Current.CancellationToken));
+    }
+
     private static string Git(string root, params string[] arguments)
     {
         var info = new ProcessStartInfo("git")
