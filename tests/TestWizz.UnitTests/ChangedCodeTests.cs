@@ -23,6 +23,9 @@ public sealed class ChangedCodeTests
             Git(root, "commit", "-qm", "change");
 
             Assert.Equal(["Demo.B"], ChangedCode.Methods(root, baseline));
+            var ranked = Assert.Single(ChangedCode.Ranked(root, baseline));
+            Assert.InRange(ranked.Risk, 0, 100);
+            Assert.Contains("changed-lines:1", ranked.Reasons);
 
             // Listing is pure Git analysis: no testwizz.json, API key, or model is needed.
             using var stdout = new StringWriter();
