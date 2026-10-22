@@ -1,0 +1,116 @@
+{
+  "schema": "testwizz.plan/v1",
+  "stack": "dotnet",
+  "target": {
+    "id": "M:Shop.Calculator.Divide(System.Int32,System.Int32)",
+    "signature": "public int Divide(int dividend, int divisor)"
+  },
+  "source": {
+    "file": "src/Shop/Calculator.cs",
+    "sha256": "765adb94000faad0755b7aa1e454dda3ba3681c6f0c0d34701fe19020d7e132c"
+  },
+  "contextSha256": "2a23649233aeced9b7f9290ac12f580888f91d4c7fb57c1b6eb011c8d199d13c",
+  "generator": {
+    "extractorVersion": "csharp-extractor/1",
+    "provider": null,
+    "model": null,
+    "modelDigest": null,
+    "promptTemplate": null,
+    "promptSha256": null
+  },
+  "evidence": [
+    {
+      "id": "E1",
+      "kind": "doc",
+      "line": null,
+      "text": "summary: Divides <paramref name=\"dividend\"/> by <paramref name=\"divisor\"/>."
+    },
+    {
+      "id": "E2",
+      "kind": "doc",
+      "line": null,
+      "text": "exception DivideByZeroException: When <paramref name=\"divisor\"/> is zero."
+    },
+    {
+      "id": "E3",
+      "kind": "guard",
+      "line": 11,
+      "text": "if (divisor == 0)"
+    },
+    {
+      "id": "E4",
+      "kind": "comparison",
+      "line": 11,
+      "text": "divisor == 0"
+    },
+    {
+      "id": "E5",
+      "kind": "throw",
+      "line": 13,
+      "text": "throw new DivideByZeroException(\"Divisor must not be zero.\");"
+    },
+    {
+      "id": "E6",
+      "kind": "return",
+      "line": 16,
+      "text": "return dividend / divisor;"
+    },
+    {
+      "id": "E7",
+      "kind": "related-test",
+      "line": null,
+      "text": "CalculatorTests.Divide_ReturnsQuotient (tests/Shop.Tests/CalculatorTests.cs:16)"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "S1",
+      "category": "happy-path",
+      "title": "Valid input",
+      "inputs": "Inputs for which none of the guard conditions hold",
+      "expectedBehavior": "Returns dividend / divisor",
+      "evidence": [
+        "E1",
+        "E6"
+      ],
+      "source": "deterministic",
+      "needsReview": true,
+      "reviewReason": "Inferred from the current implementation; no documentation or requirement confirms it.",
+      "possibleDuplicateOf": [
+        "CalculatorTests.Divide_ReturnsQuotient"
+      ]
+    },
+    {
+      "id": "S2",
+      "category": "exception",
+      "title": "Throws DivideByZeroException when divisor == 0",
+      "inputs": "divisor == 0",
+      "expectedBehavior": "Throws DivideByZeroException",
+      "evidence": [
+        "E2",
+        "E3",
+        "E5"
+      ],
+      "source": "deterministic",
+      "needsReview": false,
+      "reviewReason": null,
+      "possibleDuplicateOf": []
+    },
+    {
+      "id": "S3",
+      "category": "boundary",
+      "title": "Boundary of divisor == 0",
+      "inputs": "divisor = 0 (condition true) and divisor = 1 (condition false)",
+      "expectedBehavior": "0: throws DivideByZeroException; 1: passes this check",
+      "evidence": [
+        "E3",
+        "E4"
+      ],
+      "source": "deterministic",
+      "needsReview": true,
+      "reviewReason": "Inferred from the current implementation; no documentation or requirement confirms it.",
+      "possibleDuplicateOf": []
+    }
+  ],
+  "findings": []
+}

@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <OutputType>Exe</OutputType>
+    <!-- Test names use Method_Scenario underscores. -->
+    <NoWarn>$(NoWarn);CA1707</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Kestrel hosts the fake model servers; it ships with the SDK, so no extra package. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\TestWizz.AI\TestWizz.AI.csproj" />
+    <ProjectReference Include="..\..\src\TestWizz.Cli\TestWizz.Cli.csproj" />
+    <ProjectReference Include="..\..\src\TestWizz.Core\TestWizz.Core.csproj" />
+    <ProjectReference Include="..\..\src\TestWizz.DotNet\TestWizz.DotNet.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

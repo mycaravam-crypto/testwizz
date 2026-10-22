@@ -1,0 +1,75 @@
+{
+  "schema": "testwizz.context/v1",
+  "stack": "dotnet",
+  "provenance": {
+    "provider": "roslyn",
+    "providerVersion": "4.14.0.0",
+    "toolVersion": "test"
+  },
+  "revision": null,
+  "target": {
+    "kind": "method",
+    "id": "M:Shop.Calculator.Divide(System.Int32,System.Int32)",
+    "name": "Divide",
+    "containingType": "Shop.Calculator",
+    "namespace": "Shop",
+    "signature": "public int Divide(int dividend, int divisor)",
+    "accessibility": "public",
+    "modifiers": [],
+    "returnType": "int",
+    "parameters": [
+      {
+        "name": "dividend",
+        "type": "int",
+        "modifier": null,
+        "defaultValue": null
+      },
+      {
+        "name": "divisor",
+        "type": "int",
+        "modifier": null,
+        "defaultValue": null
+      }
+    ]
+  },
+  "source": {
+    "file": "src/Shop/Calculator.cs",
+    "startLine": 9,
+    "endLine": 17,
+    "sha256": "765adb94000faad0755b7aa1e454dda3ba3681c6f0c0d34701fe19020d7e132c",
+    "truncated": false,
+    "documentation": "<summary>Divides <paramref name=\"dividend\"/> by <paramref name=\"divisor\"/>.</summary>\n<exception cref=\"DivideByZeroException\">When <paramref name=\"divisor\"/> is zero.</exception>",
+    "excerpt": "public int Divide(int dividend, int divisor)\n{\n    if (divisor == 0)\n    {\n        throw new DivideByZeroException(\"Divisor must not be zero.\");\n    }\n\n    return dividend / divisor;\n}\n"
+  },
+  "project": "src/Shop/Shop.csproj",
+  "members": [],
+  "constructors": [],
+  "dependencies": [],
+  "throws": [
+    {
+      "type": "System.DivideByZeroException",
+      "line": 13,
+      "statement": "throw new DivideByZeroException(\"Divisor must not be zero.\");"
+    }
+  ],
+  "relatedTests": [
+    {
+      "name": "CalculatorTests.Divide_ReturnsQuotient",
+      "file": "tests/Shop.Tests/CalculatorTests.cs",
+      "line": 16,
+      "matchedOn": "member:Divide",
+      "relationship": "name-reference (not coverage)"
+    }
+  ],
+  "unavailable": [
+    {
+      "field": "requirements",
+      "reason": "No requirement source is connected for the Roslyn provider."
+    },
+    {
+      "field": "coverage",
+      "reason": "Line/branch coverage is not measured; relatedTests are name references only."
+    }
+  ],
+  "diagnostics": []
+}

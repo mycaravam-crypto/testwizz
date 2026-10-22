@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/TestWizz.AI/TestWizz.AI.csproj" />
+    <Project Path="src/TestWizz.Cli/TestWizz.Cli.csproj" />
+    <Project Path="src/TestWizz.Core/TestWizz.Core.csproj" />
+    <Project Path="src/TestWizz.DotNet/TestWizz.DotNet.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TestWizz.UnitTests/TestWizz.UnitTests.csproj" />
+  </Folder>
+</Solution>

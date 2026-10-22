@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TestWizz.Core\TestWizz.Core.csproj" />
+    <InternalsVisibleTo Include="TestWizz.UnitTests" />
+  </ItemGroup>
+
+</Project>

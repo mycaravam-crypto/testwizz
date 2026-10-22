@@ -1,0 +1,252 @@
+{
+  "schema": "testwizz.plan/v1",
+  "stack": "dotnet",
+  "target": {
+    "id": "M:Shop.OrderService.PlaceOrderAsync(System.Guid,System.Collections.Generic.IReadOnlyList{Shop.OrderLine},System.Threading.CancellationToken)",
+    "signature": "public async Task<Order> PlaceOrderAsync(Guid customerId, IReadOnlyList<OrderLine> lines, CancellationToken cancellationToken = default)"
+  },
+  "source": {
+    "file": "src/Shop/OrderService.cs",
+    "sha256": "a543d6e023dff39e908b693517bcc85f37ae7647bc41de9d045ee18f6fe00300"
+  },
+  "contextSha256": "2c6512a9195dd36627063ef87434a770b307dd0f046a8a99cd1db08677b54464",
+  "generator": {
+    "extractorVersion": "csharp-extractor/1",
+    "provider": null,
+    "model": null,
+    "modelDigest": null,
+    "promptTemplate": null,
+    "promptSha256": null
+  },
+  "evidence": [
+    {
+      "id": "E1",
+      "kind": "doc",
+      "line": null,
+      "text": "summary: Validates and stores a new order."
+    },
+    {
+      "id": "E2",
+      "kind": "cancellation",
+      "line": 17,
+      "text": "CancellationToken cancellationToken"
+    },
+    {
+      "id": "E3",
+      "kind": "throw",
+      "line": 19,
+      "text": "ArgumentNullException.ThrowIfNull(lines);"
+    },
+    {
+      "id": "E4",
+      "kind": "guard",
+      "line": 20,
+      "text": "if (lines.Count == 0)"
+    },
+    {
+      "id": "E5",
+      "kind": "comparison",
+      "line": 20,
+      "text": "lines.Count == 0"
+    },
+    {
+      "id": "E6",
+      "kind": "throw",
+      "line": 22,
+      "text": "throw new ArgumentException(\"An order needs at least one line.\", nameof(lines));"
+    },
+    {
+      "id": "E7",
+      "kind": "guard",
+      "line": 27,
+      "text": "if (line.Quantity <= 0)"
+    },
+    {
+      "id": "E8",
+      "kind": "comparison",
+      "line": 27,
+      "text": "line.Quantity <= 0"
+    },
+    {
+      "id": "E9",
+      "kind": "throw",
+      "line": 29,
+      "text": "throw new ArgumentException($\"Quantity for {line.Sku} must be positive.\", nameof(lines));"
+    },
+    {
+      "id": "E10",
+      "kind": "guard",
+      "line": 34,
+      "text": "if (total > MaxOrderTotal)"
+    },
+    {
+      "id": "E11",
+      "kind": "comparison",
+      "line": 34,
+      "text": "total > MaxOrderTotal"
+    },
+    {
+      "id": "E12",
+      "kind": "throw",
+      "line": 36,
+      "text": "throw new OrderLimitExceededException(total, MaxOrderTotal);"
+    },
+    {
+      "id": "E13",
+      "kind": "dependency",
+      "line": 39,
+      "text": "_clock.UtcNow"
+    },
+    {
+      "id": "E14",
+      "kind": "dependency",
+      "line": 40,
+      "text": "_repository.SaveAsync(order, cancellationToken)"
+    },
+    {
+      "id": "E15",
+      "kind": "return",
+      "line": 41,
+      "text": "return order;"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "S1",
+      "category": "happy-path",
+      "title": "Valid input",
+      "inputs": "Inputs for which none of the guard conditions hold",
+      "expectedBehavior": "Returns order; uses _clock.UtcNow, _repository.SaveAsync(order, cancellationToken)",
+      "evidence": [
+        "E1",
+        "E13",
+        "E14",
+        "E15"
+      ],
+      "source": "deterministic",
+      "needsReview": true,
+      "reviewReason": "Inferred from the current implementation; no documentation or requirement confirms it.",
+      "possibleDuplicateOf": []
+    },
+    {
+      "id": "S2",
+      "category": "exception",
+      "title": "Throws ArgumentNullException when lines is null",
+      "inputs": "lines = null",
+      "expectedBehavior": "Throws ArgumentNullException",
+      "evidence": [
+        "E3"
+      ],
+      "source": "deterministic",
+      "needsReview": true,
+      "reviewReason": "Inferred from the current implementation; no documentation or requirement confirms it.",
+      "possibleDuplicateOf": []
+    },
+    {
+      "id": "S3",
+      "category": "exception",
+      "title": "Throws ArgumentException when lines.Count == 0",
+      "inputs": "lines.Count == 0",
+      "expectedBehavior": "Throws ArgumentException",
+      "evidence": [
+        "E4",
+        "E6"
+      ],
+      "source": "deterministic",
+      "needsReview": true,
+      "reviewReason": "Inferred from the current implementation; no documentation or requirement confirms it.",
+      "possibleDuplicateOf": []
+    },
+    {
+      "id": "S4",
+      "category": "boundary",
+      "title": "Boundary of lines.Count == 0",
+      "inputs": "lines.Count = 0 (condition true) and lines.Count = 1 (condition false)",
+      "expectedBehavior": "0: throws ArgumentException; 1: passes this check",
+      "evidence": [
+        "E4",
+        "E5"
+      ],
+      "source": "deterministic",
+      "needsReview": true,
+      "reviewReason": "Inferred from the current implementation; no documentation or requirement confirms it.",
+      "possibleDuplicateOf": []
+    },
+    {
+      "id": "S5",
+      "category": "exception",
+      "title": "Throws ArgumentException when line.Quantity <= 0 for an element line of lines",
+      "inputs": "line.Quantity <= 0 for an element line of lines",
+      "expectedBehavior": "Throws ArgumentException",
+      "evidence": [
+        "E7",
+        "E9"
+      ],
+      "source": "deterministic",
+      "needsReview": true,
+      "reviewReason": "Inferred from the current implementation; no documentation or requirement confirms it.",
+      "possibleDuplicateOf": []
+    },
+    {
+      "id": "S6",
+      "category": "boundary",
+      "title": "Boundary of line.Quantity <= 0",
+      "inputs": "line.Quantity = 0 (condition true) and line.Quantity = 1 (condition false) for an element line of lines",
+      "expectedBehavior": "0: throws ArgumentException; 1: passes this check",
+      "evidence": [
+        "E7",
+        "E8"
+      ],
+      "source": "deterministic",
+      "needsReview": true,
+      "reviewReason": "Inferred from the current implementation; no documentation or requirement confirms it.",
+      "possibleDuplicateOf": []
+    },
+    {
+      "id": "S7",
+      "category": "exception",
+      "title": "Throws OrderLimitExceededException when total > MaxOrderTotal",
+      "inputs": "total > MaxOrderTotal",
+      "expectedBehavior": "Throws OrderLimitExceededException",
+      "evidence": [
+        "E10",
+        "E12"
+      ],
+      "source": "deterministic",
+      "needsReview": true,
+      "reviewReason": "Inferred from the current implementation; no documentation or requirement confirms it.",
+      "possibleDuplicateOf": []
+    },
+    {
+      "id": "S8",
+      "category": "boundary",
+      "title": "Boundary of total > MaxOrderTotal",
+      "inputs": "total = just above MaxOrderTotal (condition true) and total = MaxOrderTotal (condition false)",
+      "expectedBehavior": "just above MaxOrderTotal: throws OrderLimitExceededException; MaxOrderTotal: passes this check",
+      "evidence": [
+        "E10",
+        "E11"
+      ],
+      "source": "deterministic",
+      "needsReview": true,
+      "reviewReason": "Inferred from the current implementation; no documentation or requirement confirms it.",
+      "possibleDuplicateOf": []
+    },
+    {
+      "id": "S9",
+      "category": "negative",
+      "title": "Cancellation",
+      "inputs": "cancellationToken already cancelled",
+      "expectedBehavior": "Passes cancellationToken to _repository.SaveAsync(order, cancellationToken); the cancellation surfaces as OperationCanceledException",
+      "evidence": [
+        "E2",
+        "E14"
+      ],
+      "source": "deterministic",
+      "needsReview": true,
+      "reviewReason": "Inferred from the current implementation; no documentation or requirement confirms it.",
+      "possibleDuplicateOf": []
+    }
+  ],
+  "findings": []
+}

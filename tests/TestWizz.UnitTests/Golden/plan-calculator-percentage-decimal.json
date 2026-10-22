@@ -1,0 +1,115 @@
+{
+  "schema": "testwizz.plan/v1",
+  "stack": "dotnet",
+  "target": {
+    "id": "M:Shop.Calculator.Percentage(System.Decimal,System.Decimal)",
+    "signature": "public decimal Percentage(decimal value, decimal percent)"
+  },
+  "source": {
+    "file": "src/Shop/Calculator.cs",
+    "sha256": "765adb94000faad0755b7aa1e454dda3ba3681c6f0c0d34701fe19020d7e132c"
+  },
+  "contextSha256": "ac0f24cc2a74b71081569502e81d8892fa6c070e8d0ac809c2489f6e837d075c",
+  "generator": {
+    "extractorVersion": "csharp-extractor/1",
+    "provider": null,
+    "model": null,
+    "modelDigest": null,
+    "promptTemplate": null,
+    "promptSha256": null
+  },
+  "evidence": [
+    {
+      "id": "E1",
+      "kind": "guard",
+      "line": 21,
+      "text": "if (percent < 0 || percent > 100)"
+    },
+    {
+      "id": "E2",
+      "kind": "comparison",
+      "line": 21,
+      "text": "percent < 0"
+    },
+    {
+      "id": "E3",
+      "kind": "comparison",
+      "line": 21,
+      "text": "percent > 100"
+    },
+    {
+      "id": "E4",
+      "kind": "throw",
+      "line": 23,
+      "text": "throw new ArgumentOutOfRangeException(nameof(percent), percent, \"Percent must be between 0 and 100.\");"
+    },
+    {
+      "id": "E5",
+      "kind": "return",
+      "line": 26,
+      "text": "return value * percent / 100m;"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "S1",
+      "category": "happy-path",
+      "title": "Valid input",
+      "inputs": "Inputs for which none of the guard conditions hold",
+      "expectedBehavior": "Returns value * percent / 100m",
+      "evidence": [
+        "E5"
+      ],
+      "source": "deterministic",
+      "needsReview": true,
+      "reviewReason": "Inferred from the current implementation; no documentation or requirement confirms it.",
+      "possibleDuplicateOf": []
+    },
+    {
+      "id": "S2",
+      "category": "exception",
+      "title": "Throws ArgumentOutOfRangeException when percent < 0 || percent > 100",
+      "inputs": "percent < 0 || percent > 100",
+      "expectedBehavior": "Throws ArgumentOutOfRangeException",
+      "evidence": [
+        "E1",
+        "E4"
+      ],
+      "source": "deterministic",
+      "needsReview": true,
+      "reviewReason": "Inferred from the current implementation; no documentation or requirement confirms it.",
+      "possibleDuplicateOf": []
+    },
+    {
+      "id": "S3",
+      "category": "boundary",
+      "title": "Boundary of percent < 0",
+      "inputs": "percent = -1 (condition true) and percent = 0 (condition false)",
+      "expectedBehavior": "-1: throws ArgumentOutOfRangeException; 0: passes this check",
+      "evidence": [
+        "E1",
+        "E2"
+      ],
+      "source": "deterministic",
+      "needsReview": true,
+      "reviewReason": "Inferred from the current implementation; no documentation or requirement confirms it.",
+      "possibleDuplicateOf": []
+    },
+    {
+      "id": "S4",
+      "category": "boundary",
+      "title": "Boundary of percent > 100",
+      "inputs": "percent = 101 (condition true) and percent = 100 (condition false)",
+      "expectedBehavior": "101: throws ArgumentOutOfRangeException; 100: passes this check",
+      "evidence": [
+        "E1",
+        "E3"
+      ],
+      "source": "deterministic",
+      "needsReview": true,
+      "reviewReason": "Inferred from the current implementation; no documentation or requirement confirms it.",
+      "possibleDuplicateOf": []
+    }
+  ],
+  "findings": []
+}

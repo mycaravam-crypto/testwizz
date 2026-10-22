@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>testwizz</ToolCommandName>
+    <PackageId>TestWizz</PackageId>
+    <Description>Generate reviewable unit tests for .NET and Vue applications with a local AI model.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TestWizz.AI\TestWizz.AI.csproj" />
+    <ProjectReference Include="..\TestWizz.Core\TestWizz.Core.csproj" />
+    <ProjectReference Include="..\TestWizz.DotNet\TestWizz.DotNet.csproj" />
+    <InternalsVisibleTo Include="TestWizz.UnitTests" />
+  </ItemGroup>
+
+</Project>
