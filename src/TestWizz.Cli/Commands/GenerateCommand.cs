@@ -18,6 +18,7 @@ public static class GenerateCommand
     private const string SinceOption = "--since";
     private const string ListChangedOption = "--list-changed";
     private const string AllChangedOption = "--all-changed";
+    private const string MinRiskOption = "--min-risk";
     private const int MaxBatchTargets = 20;
 
     public static CommandDefinition Definition { get; } = new(
@@ -32,6 +33,7 @@ public static class GenerateCommand
             new(SinceOption, "Find C# methods changed since this Git ref; generate only when exactly one matches.", "ref"),
             new(ListChangedOption, "List changed C# methods without AI calls; suitable for CI."),
             new(AllChangedOption, "Generate proposals for up to 20 changed C# methods and produce one CI summary."),
+            new(MinRiskOption, "Minimum deterministic method-risk score (0-100).", "score"),
         ],
         MaxArguments: 1,
         Handler: Run);
@@ -43,13 +45,18 @@ public static class GenerateCommand
             throw new CliException("usage", "--list-changed and --all-changed require --since.");
         if (context.Has(AllChangedOption) && (context.Has(ListChangedOption) || context.Has("--for")))
             throw new CliException("usage", "--all-changed cannot be combined with --list-changed or --for.");
+        if (context.Has(MinRiskOption) && !context.Has(SinceOption))
+            throw new CliException("usage", "--min-risk requires --since.");
+        var minRisk = 0;
+        if (context.Has(MinRiskOption) && (!int.TryParse(context.Options[MinRiskOption], NumberStyles.None, CultureInfo.InvariantCulture, out minRisk) || minRisk is < 0 or > 100))
+            throw new CliException("usage", "--min-risk must be between 0 and 100.");
         if (context.Has(SinceOption))
         {
             var since = context.Options[SinceOption];
-            IReadOnlyList<string> targets;
+            List<string> targets;
             try
             {
-                targets = ChangedCode.Methods(root, since ?? "");
+                targets = ChangedCode.Ranked(root, since ?? "").Where(m => m.Risk >= minRisk).Select(m => m.Target).ToList();
             }
             catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
             {
@@ -63,6 +70,7 @@ public static class GenerateCommand
                     ["schema"] = "testwizz.changed-targets/v1",
                     ["base"] = since,
                     ["count"] = targets.Count,
+                    ["risk"] = new JsonArray([.. ChangedCode.Ranked(root, since ?? "").Where(m => m.Risk >= minRisk).Select(m => (JsonNode?)new JsonObject { ["target"] = m.Target, ["score"] = m.Risk, ["reasons"] = new JsonArray([.. m.Reasons.Select(r => (JsonNode?)JsonValue.Create(r))]) })]),
                     ["targets"] = new JsonArray([.. targets.Select(t => (JsonNode?)JsonValue.Create(t))]),
                 };
                 var markdown = new StringBuilder("# Changed C# targets\n\n| Target |\n|---|\n");
@@ -72,7 +80,7 @@ public static class GenerateCommand
                 return ExitCodes.Success;
             }
             if (context.Has(AllChangedOption))
-                return RunBatch(context, targets, since ?? "");
+                return RunBatch(context, targets, since ?? "", minRisk);
 
             if (targets.Count == 0)
             {
@@ -161,7 +169,7 @@ public static class GenerateCommand
         return result.IsValid ? ExitCodes.Success : ExitCodes.ValidationFailed;
     }
 
-    private static int RunBatch(CommandContext context, IReadOnlyList<string> targets, string since)
+    private static int RunBatch(CommandContext context, List<string> targets, string since, int minRisk)
     {
         if (targets.Count > MaxBatchTargets)
             throw new CliException("target.too_many", $"Changed methods: {targets.Count}; maximum is {MaxBatchTargets}. Narrow the Git comparison.");
@@ -203,6 +211,7 @@ public static class GenerateCommand
             rows.Add(new JsonObject
             {
                 ["target"] = target,
+                ["risk"] = ChangedCode.Ranked(context.PathArgument(), since).First(m => m.Target == target).Risk,
                 ["status"] = status,
                 ["proposal"] = proposalPath,
                 ["errorCode"] = errorCode,
@@ -219,6 +228,7 @@ public static class GenerateCommand
             ["base"] = since,
             ["total"] = targets.Count,
             ["failed"] = failed,
+            ["minRisk"] = minRisk,
             ["items"] = rows,
         }, markdown.ToString(), failed > 0 ? "failed" : "ok");
         return failed > 0 ? ExitCodes.ValidationFailed : ExitCodes.Success;

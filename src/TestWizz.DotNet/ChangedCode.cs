@@ -10,7 +10,11 @@ public static class ChangedCode
 {
     private static readonly Regex Hunk = new(@"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", RegexOptions.Compiled);
 
-    public static IReadOnlyList<string> Methods(string root, string since)
+    public sealed record RankedMethod(string Target, int Risk, IReadOnlyList<string> Reasons);
+
+    public static IReadOnlyList<string> Methods(string root, string since) => Ranked(root, since).Select(x => x.Target).ToList();
+
+    public static IReadOnlyList<RankedMethod> Ranked(string root, string since)
     {
         if (string.IsNullOrWhiteSpace(since) || since.StartsWith('-'))
         {
@@ -77,7 +81,7 @@ public static class ChangedCode
             }
         }
 
-        var targets = new SortedSet<string>(StringComparer.Ordinal);
+        var targets = new List<RankedMethod>();
         foreach (var (path, lines) in changed)
         {
             var full = Path.GetFullPath(path, root);
@@ -96,10 +100,28 @@ public static class ChangedCode
                 var type = method.Ancestors().OfType<TypeDeclarationSyntax>().FirstOrDefault();
                 if (type is not null)
                 {
-                    targets.Add($"{type.Identifier.ValueText}.{method.Identifier.ValueText}");
+                    var branches = method.DescendantNodes().Count(node => node is IfStatementSyntax or SwitchStatementSyntax
+                        or ConditionalExpressionSyntax or ForStatementSyntax or ForEachStatementSyntax
+                        or WhileStatementSyntax or DoStatementSyntax or CatchClauseSyntax);
+                    var guards = method.DescendantNodes().Count(node => node is ThrowStatementSyntax or ThrowExpressionSyntax);
+                    var calls = method.DescendantNodes().OfType<InvocationExpressionSyntax>().Count();
+                    var awaits = method.DescendantNodes().OfType<AwaitExpressionSyntax>().Count();
+                    var changedLines = lines.Count(n => n >= span.StartLinePosition.Line + 1 && n <= span.EndLinePosition.Line + 1);
+                    var score = Math.Min(100, 10 + Math.Min(35, branches * 9)
+                        + Math.Min(20, guards * 7) + Math.Min(15, awaits * 8)
+                        + Math.Min(10, calls * 2) + Math.Min(10, changedLines * 2));
+                    var reasons = new List<string>();
+                    if (branches > 0) reasons.Add($"branches:{branches}");
+                    if (guards > 0) reasons.Add($"guards:{guards}");
+                    if (awaits > 0) reasons.Add($"awaits:{awaits}");
+                    if (calls > 0) reasons.Add($"calls:{calls}");
+                    reasons.Add($"changed-lines:{changedLines}");
+                    targets.Add(new RankedMethod($"{type.Identifier.ValueText}.{method.Identifier.ValueText}", score, reasons));
                 }
             }
         }
-        return [.. targets];
+        return [.. targets.GroupBy(x => x.Target, StringComparer.Ordinal)
+            .Select(g => g.OrderByDescending(x => x.Risk).First())
+            .OrderByDescending(x => x.Risk).ThenBy(x => x.Target, StringComparer.Ordinal)];
     }
 }
