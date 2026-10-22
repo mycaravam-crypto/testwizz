@@ -18,12 +18,12 @@ internal static class RepositoryFiles
     public static IReadOnlyList<string> CSharpFiles(string root) => Files(root, "*.cs");
 
     /// <inheritdoc cref="CSharpFiles"/>
-    public static IReadOnlyList<string> Files(string root, string pattern)
+    public static IReadOnlyList<string> Files(string root, string pattern, int maxFiles = MaxFiles)
     {
         var files = Git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", pattern) is { } output
             ? output.Split('\0', StringSplitOptions.RemoveEmptyEntries).Where(f => File.Exists(Path.Combine(root, f)))
             : Walk(root, pattern);
-        return [.. files.Select(f => f.Replace('\\', '/')).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Take(MaxFiles)];
+        return [.. files.Select(f => f.Replace('\\', '/')).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Take(maxFiles)];
     }
 
     /// <summary>HEAD commit, or null outside a git work tree or when git is unavailable.</summary>

@@ -97,6 +97,46 @@ public static class ProposalBundle
         }
     }
 
+    public const string RunFolder = "run";
+
+    /// <summary>
+    /// Replaces the bundle's <c>run/</c> folder with this run's <c>result.json</c> and logs. The manifest is never
+    /// modified, so the proposal id keeps matching its content.
+    /// </summary>
+    public static string WriteRun(string bundleDirectory, JsonObject result, IReadOnlyDictionary<string, string> logs)
+    {
+        var final = Path.Combine(bundleDirectory, RunFolder);
+        var staging = Path.Combine(bundleDirectory, $".{RunFolder}.tmp-{Guid.NewGuid():N}");
+        var previous = Path.Combine(bundleDirectory, $".{RunFolder}.old-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(staging);
+            File.WriteAllText(Path.Combine(staging, "result.json"), result.ToJsonString(JsonOptions) + "\n");
+            foreach (var (name, content) in logs)
+            {
+                if (PathGuard.IsSafeRelative(name) && !name.Contains('/', StringComparison.Ordinal))
+                {
+                    File.WriteAllText(Path.Combine(staging, name), content);
+                }
+            }
+
+            if (Directory.Exists(final))
+            {
+                Directory.Move(final, previous);
+            }
+
+            Directory.Move(staging, final);
+            TryDelete(previous);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            TryDelete(staging);
+            throw new ProposalException("proposal.write_failed", $"Could not write the run result to {final}: {ex.Message}");
+        }
+
+        return final;
+    }
+
     public static string PlanHash(PlanDocument plan) => Sha256(PlanJson.ToJson(plan).ToJsonString());
 
     private static JsonObject Manifest(string root, ContextDocument context, PlanDocument plan, GenerationResult generation)
