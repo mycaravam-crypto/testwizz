@@ -81,7 +81,7 @@ public static class XUnitValidator
                 findings.Add(GenerationFinding.Error("unknown-scenario", $"{method.Identifier.Text} links to {unknown}, which is not in the plan.", line));
             }
 
-            tests.Add(new GeneratedTest(method.Identifier.Text, line, linked));
+            tests.Add(new GeneratedTest(method.Identifier.Text, line, linked, IsSkipped(method), Assertions(method)));
         }
 
         if (tests.Count == 0)
@@ -174,6 +174,128 @@ public static class XUnitValidator
         return provider.IsRepositoryType(model.GetSymbolInfo(node).Symbol?.ContainingType)
             || provider.IsRepositoryType(model.GetSymbolInfo(node).CandidateSymbols.FirstOrDefault()?.ContainingType);
     }
+
+    private static bool IsSkipped(MethodDeclarationSyntax method) =>
+        method.AttributeLists.SelectMany(l => l.Attributes)
+            .Where(a => TestAttributes.Contains(a.Name.ToString(), StringComparer.Ordinal))
+            .Any(a => a.ArgumentList?.Arguments.Any(arg => arg.NameEquals?.Name.Identifier.Text == "Skip") == true)
+        || method.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(i => Callee(i) is ("Assert", { } name) && name.StartsWith("Skip", StringComparison.Ordinal));
+
+    /// <summary>
+    /// Classifies the assertions in a test body: xUnit <c>Assert.*</c>, fluent <c>Should*</c> chains, mock verification
+    /// (NSubstitute <c>Received</c>, Moq <c>Verify</c>, FakeItEasy <c>MustHaveHappened</c>) and local helpers named
+    /// <c>Assert*</c>/<c>Verify*</c>. Assertions on constants and <c>NotImplementedException</c> are placeholders.
+    /// </summary>
+    private static AssertionSummary Assertions(MethodDeclarationSyntax method)
+    {
+        int meaningful = 0, weak = 0;
+        var placeholders = new SortedSet<int>();
+        foreach (var invocation in method.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        {
+            var (receiver, name) = Callee(invocation);
+            if (name is null)
+            {
+                continue;
+            }
+
+            var arguments = invocation.ArgumentList.Arguments.Select(a => a.Expression).ToList();
+            if (receiver == "Assert")
+            {
+                if (name.StartsWith("Skip", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (IsPlaceholder(name, arguments))
+                {
+                    placeholders.Add(Line(invocation.GetLocation()));
+                }
+                else if (name is "NotNull" || (name is "True" && arguments.Count > 0 && IsNullCheck(arguments[0])))
+                {
+                    weak++;
+                }
+                else
+                {
+                    meaningful++;
+                }
+            }
+            else if (name.StartsWith("Should", StringComparison.Ordinal) && !IsInsideShouldChain(invocation))
+            {
+                var subject = invocation.Expression is MemberAccessExpressionSyntax access ? access.Expression : null;
+                var chain = invocation.FirstAncestorOrSelf<ExpressionStatementSyntax>()?.Expression.ToString() ?? "";
+                if (subject is not null && IsConstant(subject))
+                {
+                    placeholders.Add(Line(invocation.GetLocation()));
+                }
+                else if (chain.EndsWith("NotBeNull()", StringComparison.Ordinal) || name == "ShouldNotBeNull")
+                {
+                    weak++;
+                }
+                else
+                {
+                    meaningful++;
+                }
+            }
+            else if (name is "Received" or "DidNotReceive" or "ReceivedWithAnyArgs" or "DidNotReceiveWithAnyArgs"
+                     or "Verify" or "VerifyAll" or "VerifyNoOtherCalls"
+                     || name.StartsWith("MustHaveHappened", StringComparison.Ordinal) || name.StartsWith("MustNotHaveHappened", StringComparison.Ordinal)
+                     || (receiver is null && (name.StartsWith("Assert", StringComparison.Ordinal) || name.StartsWith("Verify", StringComparison.Ordinal))))
+            {
+                meaningful++;
+            }
+        }
+
+        foreach (var thrown in method.DescendantNodes().OfType<ObjectCreationExpressionSyntax>()
+                     .Where(c => c.Type.ToString() is "NotImplementedException" or "System.NotImplementedException"
+                         && c.Parent is ThrowStatementSyntax or ThrowExpressionSyntax))
+        {
+            placeholders.Add(Line(thrown.GetLocation()));
+        }
+
+        return new AssertionSummary(meaningful, weak, [.. placeholders]);
+    }
+
+    private static bool IsPlaceholder(string name, List<ExpressionSyntax> arguments) => name switch
+    {
+        "True" => arguments.Count > 0 && arguments[0].IsKind(SyntaxKind.TrueLiteralExpression),
+        "False" => arguments.Count > 0 && arguments[0].IsKind(SyntaxKind.FalseLiteralExpression),
+        "Null" => arguments.Count > 0 && arguments[0].IsKind(SyntaxKind.NullLiteralExpression),
+        "NotNull" => arguments.Count > 0 && (IsConstant(arguments[0]) || arguments[0] is BaseObjectCreationExpressionSyntax),
+        "Equal" or "Same" or "StrictEqual" or "Equivalent" => arguments.Count >= 2
+            && ((IsConstant(arguments[0]) && IsConstant(arguments[1])) || arguments[0].IsEquivalentTo(arguments[1])),
+        _ => false,
+    };
+
+    private static bool IsNullCheck(ExpressionSyntax expression) =>
+        expression is BinaryExpressionSyntax { RawKind: (int)SyntaxKind.NotEqualsExpression } binary
+            && (binary.Left.IsKind(SyntaxKind.NullLiteralExpression) || binary.Right.IsKind(SyntaxKind.NullLiteralExpression))
+        || expression is IsPatternExpressionSyntax { Pattern: UnaryPatternSyntax { Pattern: ConstantPatternSyntax { Expression: LiteralExpressionSyntax literal } } }
+            && literal.IsKind(SyntaxKind.NullLiteralExpression);
+
+    private static bool IsConstant(ExpressionSyntax expression) =>
+        expression is LiteralExpressionSyntax
+        || expression is PrefixUnaryExpressionSyntax { Operand: LiteralExpressionSyntax }
+        || expression is ParenthesizedExpressionSyntax parenthesized && IsConstant(parenthesized.Expression);
+
+    /// <summary>True for <c>Be(1)</c> in <c>x.Should().Be(1)</c>: the chain is counted once, at its <c>Should</c> call.</summary>
+    private static bool IsInsideShouldChain(InvocationExpressionSyntax invocation) =>
+        invocation.Expression is MemberAccessExpressionSyntax { Expression: var inner }
+        && inner.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>().Any(i => Callee(i).Name?.StartsWith("Should", StringComparison.Ordinal) == true);
+
+    /// <summary>Receiver identifier (for <c>Assert.Equal</c>) and method name of a call; receiver is null for local calls.</summary>
+    private static (string? Receiver, string? Name) Callee(InvocationExpressionSyntax invocation) => invocation.Expression switch
+    {
+        MemberAccessExpressionSyntax access => (
+            access.Expression switch
+            {
+                IdentifierNameSyntax id => id.Identifier.Text,
+                MemberAccessExpressionSyntax { Name.Identifier.Text: var last } => last,
+                _ => "",
+            },
+            access.Name.Identifier.Text),
+        SimpleNameSyntax simple => (null, simple.Identifier.Text),
+        _ => (null, null),
+    };
 
     private static bool IsTest(MethodDeclarationSyntax method) =>
         method.AttributeLists.SelectMany(l => l.Attributes).Any(a => TestAttributes.Contains(a.Name.ToString(), StringComparer.Ordinal));

@@ -377,7 +377,7 @@ public sealed class XUnitValidatorTests : IDisposable
     [Fact]
     public void ExternalPackageTypes_AreNotFlagged()
     {
-        var code = CannedTests.Divide.Replace("Assert.Equal(4, _calculator.Divide(8, 2));", "Assert.Equal(4, _calculator.Divide(8, 2)); Assert.Multiple(() => Assert.True(true));", StringComparison.Ordinal);
+        var code = CannedTests.Divide.Replace("Assert.Equal(4, _calculator.Divide(8, 2));", "Assert.Equal(4, _calculator.Divide(8, 2)); Assert.Multiple(() => Assert.Equal(1, _calculator.Divide(1, 1)));", StringComparison.Ordinal);
 
         Assert.True(Assemble("Calculator.Divide", code).IsValid);
     }
@@ -386,6 +386,7 @@ public sealed class XUnitValidatorTests : IDisposable
 public sealed class XUnitGeneratorTests : IAsyncLifetime
 {
     private readonly string _fixture = RepoPaths.CopyToTemp(RepoPaths.DotNetFixture);
+    private readonly string _proposals = Directory.CreateTempSubdirectory("testwizz-proposals-").FullName;
     private FakeModelServer _server = null!;
 
     public async ValueTask InitializeAsync() => _server = await FakeModelServer.StartAsync();
@@ -394,6 +395,7 @@ public sealed class XUnitGeneratorTests : IAsyncLifetime
     {
         await _server.DisposeAsync();
         Directory.Delete(_fixture, recursive: true);
+        Directory.Delete(_proposals, recursive: true);
     }
 
     private static string Reply(string code, params string[] assumptions) => new JsonObject
@@ -406,7 +408,7 @@ public sealed class XUnitGeneratorTests : IAsyncLifetime
     {
         File.WriteAllText(
             Path.Combine(_fixture, "testwizz.json"),
-            new JsonObject { ["version"] = 1, ["ai"] = new JsonObject { ["endpoint"] = _server.BaseUri.ToString() } }.ToJsonString());
+            new JsonObject { ["version"] = 1, ["ai"] = new JsonObject { ["endpoint"] = _server.BaseUri.ToString() }, ["output"] = _proposals }.ToJsonString());
         using var stdout = new StringWriter();
         using var stderr = new StringWriter();
         var exit = new CliApp(stdout, stderr, _fixture, _ => null).Run(args);
@@ -460,7 +462,7 @@ public sealed class XUnitGeneratorTests : IAsyncLifetime
     }
 
     [Fact]
-    public void Cli_Generate_PrintsProposalAndWritesNothing()
+    public void Cli_Generate_WritesBundleOutsideRepositoryAndLeavesItUnchanged()
     {
         _server.AsOllama("qwen2.5-coder:14b", Reply(CannedTests.Divide));
         var before = Snapshot();
@@ -470,11 +472,26 @@ public sealed class XUnitGeneratorTests : IAsyncLifetime
         Assert.Equal(ExitCodes.Success, exit);
         Assert.Empty(stderr);
         var result = JsonNode.Parse(stdout)!["result"]!;
-        Assert.Equal("testwizz.generation/v1", (string)result["schema"]!);
+        Assert.Equal("testwizz.proposal/v1", (string)result["schema"]!);
         Assert.True((bool)result["valid"]!);
         Assert.Equal("tests/Shop.Tests/CalculatorDivideTests.cs", (string)result["files"]![0]!["path"]!);
         Assert.Equal("NSubstitute", (string)result["conventions"]!["mocking"]!);
+        Assert.Equal(Path.Combine(_proposals, (string)result["id"]!), (string)result["path"]!);
+        Assert.True(File.Exists(Path.Combine((string)result["path"]!, "files", "tests", "Shop.Tests", "CalculatorDivideTests.cs")));
         Assert.Equal(before, Snapshot());
+    }
+
+    [Fact]
+    public void Cli_Generate_TextOutputPointsAtBundle()
+    {
+        _server.AsOllama("qwen2.5-coder:14b", Reply(CannedTests.Divide));
+
+        var (exit, stdout, _) = Run("generate", "--for", "Calculator.Divide");
+
+        Assert.Equal(ExitCodes.Success, exit);
+        var bundle = Assert.Single(Directory.GetDirectories(_proposals));
+        Assert.Contains($"Bundle: {bundle}", stdout, StringComparison.Ordinal);
+        Assert.Contains("Proposed file: tests/Shop.Tests/CalculatorDivideTests.cs", stdout, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -487,6 +504,8 @@ public sealed class XUnitGeneratorTests : IAsyncLifetime
         Assert.Equal(ExitCodes.ValidationFailed, exit);
         Assert.Contains("error   unknown-member (line 11)", stdout, StringComparison.Ordinal);
         Assert.Contains("Result: FAILED", stdout, StringComparison.Ordinal);
+        var manifest = JsonNode.Parse(File.ReadAllText(Path.Combine(Assert.Single(Directory.GetDirectories(_proposals)), "manifest.json")))!;
+        Assert.False((bool)manifest["valid"]!);
     }
 
     [Fact]
@@ -498,6 +517,7 @@ public sealed class XUnitGeneratorTests : IAsyncLifetime
 
         Assert.Equal(ExitCodes.ValidationFailed, exit);
         Assert.Equal("ai.invalid_response", (string)JsonNode.Parse(stdout)!["error"]!["code"]!);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(_proposals));
     }
 
     [Fact]
@@ -514,5 +534,5 @@ public sealed class XUnitGeneratorTests : IAsyncLifetime
         [.. Directory.EnumerateFiles(_fixture, "*", SearchOption.AllDirectories)
             .Where(p => !p.EndsWith("testwizz.json", StringComparison.Ordinal))
             .Order(StringComparer.Ordinal)
-            .Select(p => $"{p}:{File.ReadAllText(p).Length}")];
+            .Select(p => $"{p}:{File.ReadAllText(p)}")];
 }

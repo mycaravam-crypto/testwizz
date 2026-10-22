@@ -1,0 +1,136 @@
+{
+  "schema": "testwizz.proposal/v1",
+  "id": "shop-calculator-divide-5242ec6f86c4",
+  "valid": true,
+  "stack": "dotnet",
+  "target": {
+    "id": "M:Shop.Calculator.Divide(System.Int32,System.Int32)",
+    "signature": "public int Divide(int dividend, int divisor)"
+  },
+  "toolVersion": "0.1.0",
+  "revision": null,
+  "contextSha256": "fe4687d8f25b9fa4d45507afce32e43f7c40b8898ede2a02fb54b2c2c2595fc9",
+  "planSha256": "07564d081ee0d846506b0da5c072770d0ca22bc159510db123f04b01de3cad56",
+  "generator": {
+    "provider": "ollama",
+    "model": "qwen2.5-coder:14b",
+    "modelDigest": "sha256:abc123",
+    "promptTemplate": "xunit/v1",
+    "promptSha256": "30b6f67ebe85568e424a12e52bf473c38a81f3157f836c1000c0822de030d7ca"
+  },
+  "conventions": {
+    "targetProject": "src/Shop/Shop.csproj",
+    "testProject": "tests/Shop.Tests/Shop.Tests.csproj",
+    "targetFramework": "net10.0",
+    "xunit": "xunit.v3 3.2.2",
+    "mocking": "NSubstitute",
+    "assertions": "xunit Assert",
+    "xunitGlobalUsing": true,
+    "implicitUsings": true,
+    "packages": [
+      "Microsoft.NET.Test.Sdk 18.8.1",
+      "NSubstitute 5.3.0",
+      "xunit.runner.visualstudio 3.1.5",
+      "xunit.v3 3.2.2"
+    ],
+    "namespace": "Shop.Tests",
+    "className": "CalculatorDivideTests",
+    "filePath": "tests/Shop.Tests/CalculatorDivideTests.cs",
+    "namingPattern": "Method_ExpectedResult",
+    "exampleTestNames": [
+      "Add_ReturnsSum",
+      "Divide_ReturnsQuotient"
+    ],
+    "styleExampleFile": "tests/Shop.Tests/CalculatorTests.cs"
+  },
+  "sources": [
+    {
+      "path": "src/Shop/Calculator.cs",
+      "sha256": "765adb94000faad0755b7aa1e454dda3ba3681c6f0c0d34701fe19020d7e132c"
+    }
+  ],
+  "files": [
+    {
+      "path": "tests/Shop.Tests/CalculatorDivideTests.cs",
+      "bundlePath": "files/tests/Shop.Tests/CalculatorDivideTests.cs",
+      "sha256": "7c9cc03e5fbc94630b1d0c6a57b416e1e81b58f018e5107ac41a503b73d637a8"
+    }
+  ],
+  "tests": [
+    {
+      "name": "Divide_ReturnsQuotient",
+      "line": 9,
+      "scenarios": [
+        "S1"
+      ],
+      "skipped": false,
+      "assertions": {
+        "meaningful": 1,
+        "weak": 0,
+        "placeholderLines": []
+      }
+    },
+    {
+      "name": "Divide_ByZero_Throws",
+      "line": 16,
+      "scenarios": [
+        "S2"
+      ],
+      "skipped": false,
+      "assertions": {
+        "meaningful": 1,
+        "weak": 0,
+        "placeholderLines": []
+      }
+    },
+    {
+      "name": "Divide_ByOne_ReturnsDividend",
+      "line": 25,
+      "scenarios": [
+        "S3"
+      ],
+      "skipped": false,
+      "assertions": {
+        "meaningful": 1,
+        "weak": 0,
+        "placeholderLines": []
+      }
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "S1",
+      "category": "happy-path",
+      "title": "Valid input",
+      "source": "deterministic",
+      "needsReview": true,
+      "coveredBy": [
+        "Divide_ReturnsQuotient"
+      ]
+    },
+    {
+      "id": "S2",
+      "category": "exception",
+      "title": "Throws DivideByZeroException when divisor == 0",
+      "source": "deterministic",
+      "needsReview": false,
+      "coveredBy": [
+        "Divide_ByZero_Throws"
+      ]
+    },
+    {
+      "id": "S3",
+      "category": "boundary",
+      "title": "Boundary of divisor == 0",
+      "source": "deterministic",
+      "needsReview": true,
+      "coveredBy": [
+        "Divide_ByOne_ReturnsDividend"
+      ]
+    }
+  ],
+  "assumptions": [
+    "Used 8 / 2 as a representative division."
+  ],
+  "findings": []
+}

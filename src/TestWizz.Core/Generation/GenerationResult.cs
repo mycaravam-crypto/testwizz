@@ -5,8 +5,18 @@ namespace TestWizz.Core.Generation;
 /// <param name="Path">Repository-relative path the file is proposed for. Chosen by TestWizz, never by the model.</param>
 public sealed record GeneratedFile(string Path, string Content);
 
-/// <summary>A generated test and the plan scenarios it claims to cover.</summary>
-public sealed record GeneratedTest(string Name, int Line, IReadOnlyList<string> Scenarios);
+/// <summary>A generated test, the plan scenarios it claims to cover and what the stack's analyzer found in its body.</summary>
+/// <param name="Skipped">The test is skipped (attribute or runtime skip).</param>
+/// <param name="Assertions">Assertions found in the test, classified by the stack's analyzer.</param>
+public sealed record GeneratedTest(string Name, int Line, IReadOnlyList<string> Scenarios, bool Skipped, AssertionSummary Assertions);
+
+/// <param name="Meaningful">Assertions that check a computed value, an exception or an interaction.</param>
+/// <param name="Weak">Assertions that only check for null or non-null.</param>
+/// <param name="PlaceholderLines">Lines with assertions that can never fail (e.g. <c>Assert.True(true)</c>) or unfinished bodies.</param>
+public sealed record AssertionSummary(int Meaningful, int Weak, IReadOnlyList<int> PlaceholderLines)
+{
+    public static AssertionSummary None { get; } = new(0, 0, []);
+}
 
 /// <param name="Severity"><c>error</c> makes the result invalid (exit code 1); <c>warning</c> needs attention.</param>
 public sealed record GenerationFinding(string Severity, string Code, string Message, int? Line = null)
@@ -61,19 +71,30 @@ public static class GenerationJson
         },
         ["conventions"] = r.Conventions.DeepClone(),
         ["files"] = new JsonArray([.. r.Files.Select(f => (JsonNode)new JsonObject { ["path"] = f.Path, ["content"] = f.Content })]),
-        ["tests"] = new JsonArray([.. r.Tests.Select(t => (JsonNode)new JsonObject
-        {
-            ["name"] = t.Name,
-            ["line"] = t.Line,
-            ["scenarios"] = new JsonArray([.. t.Scenarios.Select(s => (JsonNode)s)]),
-        })]),
+        ["tests"] = new JsonArray([.. r.Tests.Select(t => (JsonNode)ToJson(t))]),
         ["assumptions"] = new JsonArray([.. r.Assumptions.Select(a => (JsonNode)a)]),
-        ["findings"] = new JsonArray([.. r.Findings.Select(f => (JsonNode)new JsonObject
+        ["findings"] = new JsonArray([.. r.Findings.Select(f => (JsonNode)ToJson(f))]),
+    };
+
+    public static JsonObject ToJson(GeneratedTest t) => new()
+    {
+        ["name"] = t.Name,
+        ["line"] = t.Line,
+        ["scenarios"] = new JsonArray([.. t.Scenarios.Select(s => (JsonNode)s)]),
+        ["skipped"] = t.Skipped,
+        ["assertions"] = new JsonObject
         {
-            ["severity"] = f.Severity,
-            ["code"] = f.Code,
-            ["message"] = f.Message,
-            ["line"] = f.Line,
-        })]),
+            ["meaningful"] = t.Assertions.Meaningful,
+            ["weak"] = t.Assertions.Weak,
+            ["placeholderLines"] = new JsonArray([.. t.Assertions.PlaceholderLines.Select(l => (JsonNode)l)]),
+        },
+    };
+
+    public static JsonObject ToJson(GenerationFinding f) => new()
+    {
+        ["severity"] = f.Severity,
+        ["code"] = f.Code,
+        ["message"] = f.Message,
+        ["line"] = f.Line,
     };
 }

@@ -79,6 +79,9 @@ public sealed class RoslynContextProvider
 
     public static RoslynContextProvider Load(string root) => new(Path.GetFullPath(root));
 
+    /// <summary>Full path of the repository root the provider was loaded from.</summary>
+    public string Root => _root;
+
     /// <summary>The repository compilation, for checking generated code against the real API.</summary>
     internal Compilation Compilation => _compilation;
 
