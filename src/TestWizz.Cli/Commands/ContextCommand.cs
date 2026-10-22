@@ -22,11 +22,21 @@ public static class ContextCommand
         MaxArguments: 1,
         Handler: Run);
 
+    public static OptionDefinition[] TargetOptions => [.. Definition.Options];
+
     private static int Run(CommandContext context)
+    {
+        var document = Load(context, Definition.Usage);
+        context.Output.Result("context", ContextJson.ToJson(document), ToText(document));
+        return ExitCodes.Success;
+    }
+
+    /// <summary>Resolves <c>--for</c> in the path argument's repository; shared by commands that start from a context.</summary>
+    public static ContextDocument Load(CommandContext context, string usage)
     {
         if (!context.Options.TryGetValue(ForOption, out var target) || string.IsNullOrWhiteSpace(target))
         {
-            throw new CliException("usage", $"Missing {ForOption} <target>. Usage: {Definition.Usage}");
+            throw new CliException("usage", $"Missing {ForOption} <target>. Usage: {usage}");
         }
 
         var maxChars = RoslynContextProvider.DefaultMaxExcerptChars;
@@ -42,19 +52,20 @@ public static class ContextCommand
             throw new CliException("path.not_found", $"Directory not found: {root}");
         }
 
-        ContextDocument document;
         try
         {
-            document = RoslynContextProvider.Load(root).GetContext(target, CliApp.Version, maxChars);
+            return RoslynContextProvider.Load(root).GetContext(target, CliApp.Version, maxChars);
         }
         catch (ContextException ex)
         {
-            var hint = ex.Candidates.Count > 0 ? " Candidates are listed below." : "";
-            throw new CliException(ex.Code, ex.Message + hint, details: [.. ex.Candidates.Select(c => ("candidate", c))]);
+            throw ToCliException(ex);
         }
+    }
 
-        context.Output.Result("context", ContextJson.ToJson(document), ToText(document));
-        return ExitCodes.Success;
+    public static CliException ToCliException(ContextException ex)
+    {
+        var hint = ex.Candidates.Count > 0 ? " Candidates are listed below." : "";
+        return new CliException(ex.Code, ex.Message + hint, details: [.. ex.Candidates.Select(c => ("candidate", c))]);
     }
 
     private static string ToText(ContextDocument d)

@@ -1,0 +1,156 @@
+{
+  "schema": "testwizz.plan/v1",
+  "stack": "dotnet",
+  "target": {
+    "id": "M:Shop.OrderService.CancelAsync(System.Guid,System.Threading.CancellationToken)",
+    "signature": "public async Task<bool> CancelAsync(Guid orderId, CancellationToken cancellationToken = default)"
+  },
+  "source": {
+    "file": "src/Shop/OrderService.cs",
+    "sha256": "a543d6e023dff39e908b693517bcc85f37ae7647bc41de9d045ee18f6fe00300"
+  },
+  "contextSha256": "4ec4aed4e138614011ca4a38b4454fe99f560030da9d3dcaf7afb3073b4a9f44",
+  "generator": {
+    "extractorVersion": "csharp-extractor/1",
+    "provider": null,
+    "model": null,
+    "modelDigest": null,
+    "promptTemplate": null,
+    "promptSha256": null
+  },
+  "evidence": [
+    {
+      "id": "E1",
+      "kind": "cancellation",
+      "line": 44,
+      "text": "CancellationToken cancellationToken"
+    },
+    {
+      "id": "E2",
+      "kind": "dependency",
+      "line": 46,
+      "text": "_repository.FindAsync(orderId, cancellationToken)"
+    },
+    {
+      "id": "E3",
+      "kind": "branch",
+      "line": 47,
+      "text": "if (order is null)"
+    },
+    {
+      "id": "E4",
+      "kind": "return",
+      "line": 49,
+      "text": "return false;"
+    },
+    {
+      "id": "E5",
+      "kind": "guard",
+      "line": 52,
+      "text": "if (_clock.UtcNow - order.PlacedAt > TimeSpan.FromHours(24))"
+    },
+    {
+      "id": "E6",
+      "kind": "comparison",
+      "line": 52,
+      "text": "_clock.UtcNow - order.PlacedAt > TimeSpan.FromHours(24)"
+    },
+    {
+      "id": "E7",
+      "kind": "dependency",
+      "line": 52,
+      "text": "_clock.UtcNow"
+    },
+    {
+      "id": "E8",
+      "kind": "throw",
+      "line": 54,
+      "text": "throw new InvalidOperationException(\"Orders can only be cancelled within 24 hours.\");"
+    },
+    {
+      "id": "E9",
+      "kind": "return",
+      "line": 57,
+      "text": "return true;"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "S1",
+      "category": "happy-path",
+      "title": "Valid input",
+      "inputs": "Inputs for which none of the guard conditions hold",
+      "expectedBehavior": "Returns true; uses _repository.FindAsync(orderId, cancellationToken), _clock.UtcNow",
+      "evidence": [
+        "E2",
+        "E7",
+        "E9"
+      ],
+      "source": "deterministic",
+      "needsReview": true,
+      "reviewReason": "Inferred from the current implementation; no documentation or requirement confirms it.",
+      "possibleDuplicateOf": []
+    },
+    {
+      "id": "S2",
+      "category": "negative",
+      "title": "Returns false when order is null",
+      "inputs": "order is null",
+      "expectedBehavior": "Returns false",
+      "evidence": [
+        "E3",
+        "E4"
+      ],
+      "source": "deterministic",
+      "needsReview": true,
+      "reviewReason": "Inferred from the current implementation; no documentation or requirement confirms it.",
+      "possibleDuplicateOf": []
+    },
+    {
+      "id": "S3",
+      "category": "exception",
+      "title": "Throws InvalidOperationException when _clock.UtcNow - order.PlacedAt > TimeSpan.FromHours(24)",
+      "inputs": "_clock.UtcNow - order.PlacedAt > TimeSpan.FromHours(24)",
+      "expectedBehavior": "Throws InvalidOperationException",
+      "evidence": [
+        "E5",
+        "E8"
+      ],
+      "source": "deterministic",
+      "needsReview": true,
+      "reviewReason": "Inferred from the current implementation; no documentation or requirement confirms it.",
+      "possibleDuplicateOf": []
+    },
+    {
+      "id": "S4",
+      "category": "boundary",
+      "title": "Boundary of _clock.UtcNow - order.PlacedAt > TimeSpan.FromHours(24)",
+      "inputs": "_clock.UtcNow - order.PlacedAt = just above TimeSpan.FromHours(24) (condition true) and _clock.UtcNow - order.PlacedAt = TimeSpan.FromHours(24) (condition false)",
+      "expectedBehavior": "just above TimeSpan.FromHours(24): throws InvalidOperationException; TimeSpan.FromHours(24): passes this check",
+      "evidence": [
+        "E5",
+        "E6"
+      ],
+      "source": "deterministic",
+      "needsReview": true,
+      "reviewReason": "Inferred from the current implementation; no documentation or requirement confirms it.",
+      "possibleDuplicateOf": []
+    },
+    {
+      "id": "S5",
+      "category": "negative",
+      "title": "Cancellation",
+      "inputs": "cancellationToken already cancelled",
+      "expectedBehavior": "Passes cancellationToken to _repository.FindAsync(orderId, cancellationToken); the cancellation surfaces as OperationCanceledException",
+      "evidence": [
+        "E1",
+        "E2"
+      ],
+      "source": "deterministic",
+      "needsReview": true,
+      "reviewReason": "Inferred from the current implementation; no documentation or requirement confirms it.",
+      "possibleDuplicateOf": []
+    }
+  ],
+  "findings": []
+}

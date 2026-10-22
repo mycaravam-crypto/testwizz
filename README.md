@@ -13,6 +13,7 @@ Status: early development. See [PLAN.md](PLAN.md) for the design and milestones.
 | `testwizz config [path]` | Validate `testwizz.json` and show the effective configuration. |
 | `testwizz ai check [path]` | Check that the configured model is reachable, private, installed and returns schema-valid JSON. |
 | `testwizz context [path] --for <target>` | Show the `testwizz.context/v1` context for a C# type or method (signature, source excerpt, injected dependencies, thrown exceptions, related tests). |
+| `testwizz plan [path] --for <method> [--ai]` | Plan evidence-linked test scenarios (`testwizz.plan/v1`); `--ai` lets the local model propose more. |
 
 Global options: `--format text|json`, `--help`, `--version`.
 
@@ -76,6 +77,19 @@ testwizz context . --for "Calculator.Percentage(decimal, int)" --format json
 Targets can be `Type`, `Namespace.Type`, `Type.Method`, `Type.Method(paramTypes)` or a documentation id (`M:Shop.Calculator.Add(System.Int32,System.Int32)`). Overloads without parameter types are rejected with a list of candidates; unknown names list similar ones.
 
 The built-in provider uses Roslyn on the repository's `.cs` files (`git ls-files`, so `.gitignore` is respected) without running MSBuild. Types from NuGet packages are reported as `unresolved-type` diagnostics rather than guessed. `relatedTests` are tests that mention the target by name: a relationship, **not** coverage. A DocWizz provider will produce the same contract.
+
+## Plan
+
+```bash
+testwizz plan . --for Calculator.Divide          # deterministic, no network
+testwizz plan . --for OrderService.PlaceOrderAsync --ai --format json
+```
+
+The planner builds an **evidence catalog** from the method (guards, thrown exceptions, comparisons, early returns, switch cases, dependency calls, cancellation tokens, XML docs, related tests) and derives scenarios from it: happy path, one exception scenario per guard, boundary pairs for every comparison against a constant (`percent < 0` → `-1` vs `0`), early-return and switch-case scenarios, and cancellation. Every scenario cites evidence ids.
+
+- Expectations that come only from the current code are `needsReview: true`, because the code may be wrong. An exception documented with `<exception cref=...>` is treated as confirmed.
+- Existing tests that look like they cover a scenario are listed in `possibleDuplicateOf` (name heuristics, not coverage).
+- With `--ai`, the model sees the repository data inside a block declared as untrusted, answers with schema-constrained JSON, and every proposed scenario must cite existing evidence ids. Anything else is dropped and reported under `findings`. AI scenarios are always marked for review. The plan records the model, its digest and the prompt version.
 
 ## Development
 

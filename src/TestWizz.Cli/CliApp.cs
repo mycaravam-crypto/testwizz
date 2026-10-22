@@ -23,6 +23,7 @@ public sealed class CliApp(
         ConfigCommand.Definition,
         AiCommand.Definition,
         ContextCommand.Definition,
+        PlanCommand.Definition,
     ];
 
     public static IReadOnlyDictionary<string, CommandDefinition> CommandsByName { get; } =
