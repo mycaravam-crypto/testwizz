@@ -16,7 +16,16 @@ public static class VueContext
             throw new ContextException("target.invalid", "Vue target must be a project-relative .vue path.");
         string full = Path.GetFullPath(relative, root);
         if (!File.Exists(full))
-            throw new ContextException("target.not_found", $"Vue component not found: {relative}.");
+        {
+            var candidates = Directory.EnumerateFiles(root, "*.vue", SearchOption.AllDirectories)
+                .Where(path => !path.Split(Path.DirectorySeparatorChar)
+                    .Any(segment => segment is "node_modules" or "dist" or "build" or ".git"))
+                .Select(path => Path.GetRelativePath(root, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .Take(20)
+                .ToArray();
+            throw new ContextException("target.not_found", $"Vue component not found: {relative}.", candidates);
+        }
         var bytes = File.ReadAllBytes(full);
         using Stream resource = typeof(VueContext).Assembly.GetManifestResourceStream("vue-context.mjs")
             ?? throw new ContextException("vue.helper_missing", "Bundled Vue helper not found.");
