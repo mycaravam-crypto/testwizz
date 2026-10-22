@@ -18,8 +18,8 @@ public static class ScenarioEnricher
     public const string PromptTemplate = "scenarios/v1";
     public const int MaxAiScenarios = 10;
     public const int MaxFieldLength = 500;
-    public const string BeginData = "<<<UNTRUSTED_REPOSITORY_DATA";
-    public const string EndData = "UNTRUSTED_REPOSITORY_DATA>>>";
+    public const string BeginData = PromptData.Begin;
+    public const string EndData = PromptData.End;
 
     public static readonly string SystemPrompt = $"""
         You are a senior software test engineer planning unit tests for one method.
@@ -118,13 +118,7 @@ public static class ScenarioEnricher
         ExtractionResult extraction,
         CancellationToken cancellationToken)
     {
-        string? digest = null;
-        var models = await client.ListModelsAsync(cancellationToken).ConfigureAwait(false);
-        if (models?.FirstOrDefault(m => m.Name == client.Settings.Model || m.Name == client.Settings.Model + ":latest") is { } installed)
-        {
-            digest = installed.Digest;
-        }
-
+        var digest = await client.ModelDigestAsync(cancellationToken).ConfigureAwait(false);
         var response = await client.CompleteJsonAsync(BuildRequest(context, extraction), cancellationToken).ConfigureAwait(false);
         var (scenarios, findings) = Validate(response.Content, extraction);
         return new Enrichment(
@@ -201,9 +195,7 @@ public static class ScenarioEnricher
         return (scenarios, findings);
     }
 
-    /// <summary>Stops repository text from closing the data block early.</summary>
-    public static string Neutralize(string text) =>
-        text.Replace(BeginData, "[marker removed]", StringComparison.Ordinal).Replace(EndData, "[marker removed]", StringComparison.Ordinal);
+    private static string Neutralize(string text) => PromptData.Neutralize(text);
 
     private static string? Text(JsonObject item, string name) =>
         item[name]?.GetValue<string>() is { } value && value.Trim().Length is > 0 and <= MaxFieldLength ? value.Trim() : null;
