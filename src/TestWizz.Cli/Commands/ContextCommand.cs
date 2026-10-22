@@ -54,7 +54,9 @@ public static class ContextCommand
 
         try
         {
-            return RoslynContextProvider.Load(root).GetContext(target, CliApp.Version, maxChars);
+            return target.EndsWith(".vue", StringComparison.OrdinalIgnoreCase)
+                ? VueContext.Load(root, target, maxChars)
+                : RoslynContextProvider.Load(root).GetContext(target, CliApp.Version, maxChars);
         }
         catch (ContextException ex)
         {
