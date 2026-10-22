@@ -14,7 +14,7 @@ public sealed class ChangedCodeTests
             Git(root, "init", "-q");
             Git(root, "config", "user.name", "TestWizz");
             Git(root, "config", "user.email", "testwizz@example.invalid");
-            File.WriteAllText(Path.Combine(root, "Demo.cs"), "class Demo { int A() => 1; int B() => 2; }\n");
+            File.WriteAllText(Path.Combine(root, "Demo.cs"), "class Demo {\n int A() => 1;\n int B() => 2;\n}\n");
             Git(root, "add", "Demo.cs");
             Git(root, "commit", "-qm", "initial");
             var baseline = Git(root, "rev-parse", "HEAD").Trim();
