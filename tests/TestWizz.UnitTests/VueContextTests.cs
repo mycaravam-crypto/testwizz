@@ -29,8 +29,11 @@ public sealed class VueContextTests
         var root = Directory.CreateTempSubdirectory("testwizz-vue-").FullName;
         try
         {
+            Directory.CreateDirectory(Path.Combine(root, "src", "components"));
+            File.WriteAllText(Path.Combine(root, "src", "components", "CartItem.vue"), "<template/>");
             ContextException ex = Assert.Throws<ContextException>(() => VueContext.Load(root, "src/App.vue", 20_000));
             Assert.Equal("target.not_found", ex.Code);
+            Assert.Contains("src/components/CartItem.vue", ex.Candidates);
         }
         finally
         {
