@@ -32,7 +32,7 @@ public static class ChangedCode
         using var process = Process.Start(psi) ?? throw new InvalidOperationException("Unable to launch git.");
         var outputTask = process.StandardOutput.ReadToEndAsync();
         var errorTask = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit(TimeSpan.FromSeconds(30)))
+        if (!process.WaitForExit(30_000))
         {
             process.Kill(entireProcessTree: true);
             throw new InvalidOperationException("Git diff timed out.");
