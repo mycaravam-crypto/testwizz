@@ -1,0 +1,151 @@
+{
+  "schema": "testwizz.context/v1",
+  "stack": "dotnet",
+  "provenance": {
+    "provider": "roslyn",
+    "providerVersion": "4.14.0.0",
+    "toolVersion": "test"
+  },
+  "revision": null,
+  "target": {
+    "kind": "method",
+    "id": "M:Shop.OrderService.PlaceOrderAsync(System.Guid,System.Collections.Generic.IReadOnlyList{Shop.OrderLine},System.Threading.CancellationToken)",
+    "name": "PlaceOrderAsync",
+    "containingType": "Shop.OrderService",
+    "namespace": "Shop",
+    "signature": "public async Task<Order> PlaceOrderAsync(Guid customerId, IReadOnlyList<OrderLine> lines, CancellationToken cancellationToken = default)",
+    "accessibility": "public",
+    "modifiers": [
+      "async"
+    ],
+    "returnType": "System.Threading.Tasks.Task<Shop.Order>",
+    "parameters": [
+      {
+        "name": "customerId",
+        "type": "System.Guid",
+        "modifier": null,
+        "defaultValue": null
+      },
+      {
+        "name": "lines",
+        "type": "System.Collections.Generic.IReadOnlyList<Shop.OrderLine>",
+        "modifier": null,
+        "defaultValue": null
+      },
+      {
+        "name": "cancellationToken",
+        "type": "System.Threading.CancellationToken",
+        "modifier": null,
+        "defaultValue": "default"
+      }
+    ]
+  },
+  "source": {
+    "file": "src/Shop/OrderService.cs",
+    "startLine": 17,
+    "endLine": 42,
+    "sha256": "a543d6e023dff39e908b693517bcc85f37ae7647bc41de9d045ee18f6fe00300",
+    "truncated": false,
+    "documentation": "<summary>Validates and stores a new order.</summary>",
+    "excerpt": "public async Task<Order> PlaceOrderAsync(Guid customerId, IReadOnlyList<OrderLine> lines, CancellationToken cancellationToken = default)\n{\n    ArgumentNullException.ThrowIfNull(lines);\n    if (lines.Count == 0)\n    {\n        throw new ArgumentException(\"An order needs at least one line.\", nameof(lines));\n    }\n\n    foreach (var line in lines)\n    {\n        if (line.Quantity <= 0)\n        {\n            throw new ArgumentException($\"Quantity for {line.Sku} must be positive.\", nameof(lines));\n        }\n    }\n\n    var total = lines.Sum(l => l.Quantity * l.UnitPrice);\n    if (total > MaxOrderTotal)\n    {\n        throw new OrderLimitExceededException(total, MaxOrderTotal);\n    }\n\n    var order = new Order(Guid.NewGuid(), customerId, lines, total, _clock.UtcNow);\n    await _repository.SaveAsync(order, cancellationToken);\n    return order;\n}\n"
+  },
+  "project": "src/Shop/Shop.csproj",
+  "members": [],
+  "constructors": [
+    {
+      "id": "M:Shop.OrderService.#ctor(Shop.IOrderRepository,Shop.IClock)",
+      "signature": "public OrderService(IOrderRepository repository, IClock clock)",
+      "file": "src/Shop/OrderService.cs",
+      "line": 10
+    }
+  ],
+  "dependencies": [
+    {
+      "role": "constructor",
+      "parameterName": "repository",
+      "type": "Shop.IOrderRepository",
+      "kind": "interface",
+      "declaredIn": {
+        "file": "src/Shop/Orders.cs",
+        "line": 7
+      },
+      "members": [
+        "Task<Order?> FindAsync(Guid id, CancellationToken cancellationToken)",
+        "Task SaveAsync(Order order, CancellationToken cancellationToken)"
+      ]
+    },
+    {
+      "role": "constructor",
+      "parameterName": "clock",
+      "type": "Shop.IClock",
+      "kind": "interface",
+      "declaredIn": {
+        "file": "src/Shop/Orders.cs",
+        "line": 14
+      },
+      "members": [
+        "DateTimeOffset UtcNow { get; }"
+      ]
+    },
+    {
+      "role": "parameter",
+      "parameterName": "lines",
+      "type": "Shop.OrderLine",
+      "kind": "record",
+      "declaredIn": {
+        "file": "src/Shop/Orders.cs",
+        "line": 3
+      },
+      "members": [
+        "record OrderLine(string Sku, int Quantity, decimal UnitPrice)"
+      ]
+    },
+    {
+      "role": "return",
+      "parameterName": "",
+      "type": "Shop.Order",
+      "kind": "record",
+      "declaredIn": {
+        "file": "src/Shop/Orders.cs",
+        "line": 5
+      },
+      "members": [
+        "record Order(Guid Id, Guid CustomerId, IReadOnlyList<OrderLine> Lines, decimal Total, DateTimeOffset PlacedAt)"
+      ]
+    }
+  ],
+  "throws": [
+    {
+      "type": "System.ArgumentNullException",
+      "line": 19,
+      "statement": "ArgumentNullException.ThrowIfNull(lines);"
+    },
+    {
+      "type": "System.ArgumentException",
+      "line": 22,
+      "statement": "throw new ArgumentException(\"An order needs at least one line.\", nameof(lines));"
+    },
+    {
+      "type": "System.ArgumentException",
+      "line": 29,
+      "statement": "throw new ArgumentException($\"Quantity for {line.Sku} must be positive.\", nameof(lines));"
+    },
+    {
+      "type": "Shop.OrderLimitExceededException",
+      "line": 36,
+      "statement": "throw new OrderLimitExceededException(total, MaxOrderTotal);"
+    }
+  ],
+  "relatedTests": [],
+  "unavailable": [
+    {
+      "field": "requirements",
+      "reason": "No requirement source is connected for the Roslyn provider."
+    },
+    {
+      "field": "coverage",
+      "reason": "Line/branch coverage is not measured; relatedTests are name references only."
+    }
+  ],
+  "diagnostics": []
+}

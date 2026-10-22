@@ -11,6 +11,7 @@
   <ItemGroup>
     <ProjectReference Include="..\TestWizz.AI\TestWizz.AI.csproj" />
     <ProjectReference Include="..\TestWizz.Core\TestWizz.Core.csproj" />
+    <ProjectReference Include="..\TestWizz.DotNet\TestWizz.DotNet.csproj" />
     <InternalsVisibleTo Include="TestWizz.UnitTests" />
   </ItemGroup>
 

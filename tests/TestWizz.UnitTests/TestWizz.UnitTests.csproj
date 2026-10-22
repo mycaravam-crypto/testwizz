@@ -22,6 +22,7 @@
     <ProjectReference Include="..\..\src\TestWizz.AI\TestWizz.AI.csproj" />
     <ProjectReference Include="..\..\src\TestWizz.Cli\TestWizz.Cli.csproj" />
     <ProjectReference Include="..\..\src\TestWizz.Core\TestWizz.Core.csproj" />
+    <ProjectReference Include="..\..\src\TestWizz.DotNet\TestWizz.DotNet.csproj" />
   </ItemGroup>
 
   <ItemGroup>

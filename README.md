@@ -12,6 +12,7 @@ Status: early development. See [PLAN.md](PLAN.md) for the design and milestones.
 | `testwizz init [path] [--force]` | Create a default `testwizz.json` in a directory. Refuses to overwrite without `--force`. |
 | `testwizz config [path]` | Validate `testwizz.json` and show the effective configuration. |
 | `testwizz ai check [path]` | Check that the configured model is reachable, private, installed and returns schema-valid JSON. |
+| `testwizz context [path] --for <target>` | Show the `testwizz.context/v1` context for a C# type or method (signature, source excerpt, injected dependencies, thrown exceptions, related tests). |
 
 Global options: `--format text|json`, `--help`, `--version`.
 
@@ -65,6 +66,17 @@ Network rules for every model call:
 - The host is resolved on every connection; if *any* address is public the connection is refused, and the socket connects to the address that was checked.
 - System proxies (`HTTP(S)_PROXY`) are ignored, redirects are not followed, and TLS certificates are validated normally. There is no option to skip validation; trust a self-signed certificate in your OS store instead.
 
+## Context
+
+```bash
+testwizz context . --for OrderService.PlaceOrderAsync
+testwizz context . --for "Calculator.Percentage(decimal, int)" --format json
+```
+
+Targets can be `Type`, `Namespace.Type`, `Type.Method`, `Type.Method(paramTypes)` or a documentation id (`M:Shop.Calculator.Add(System.Int32,System.Int32)`). Overloads without parameter types are rejected with a list of candidates; unknown names list similar ones.
+
+The built-in provider uses Roslyn on the repository's `.cs` files (`git ls-files`, so `.gitignore` is respected) without running MSBuild. Types from NuGet packages are reported as `unresolved-type` diagnostics rather than guessed. `relatedTests` are tests that mention the target by name: a relationship, **not** coverage. A DocWizz provider will produce the same contract.
+
 ## Development
 
 Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download).
@@ -80,4 +92,4 @@ dotnet tool install --global TestWizz --add-source ./artifacts
 testwizz --version
 ```
 
-Layout: `src/TestWizz.Cli` (commands, output), `src/TestWizz.Core` (configuration and, later, contracts), `src/TestWizz.AI` (model clients, endpoint guard, `ai check`), `tests/TestWizz.UnitTests` (xUnit v3; model servers are faked on loopback, so no real AI or network is needed).
+Layout: `src/TestWizz.Cli` (commands, output), `src/TestWizz.Core` (configuration and, later, contracts), `src/TestWizz.AI` (model clients, endpoint guard, `ai check`), `src/TestWizz.DotNet` (Roslyn context provider), `fixtures/dotnet` (sample solution used by golden tests; regenerate goldens with `TESTWIZZ_UPDATE_GOLDEN=1 dotnet test`), `tests/TestWizz.UnitTests` (xUnit v3; model servers are faked on loopback, so no real AI or network is needed).

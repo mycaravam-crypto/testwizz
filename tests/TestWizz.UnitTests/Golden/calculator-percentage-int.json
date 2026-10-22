@@ -1,0 +1,61 @@
+{
+  "schema": "testwizz.context/v1",
+  "stack": "dotnet",
+  "provenance": {
+    "provider": "roslyn",
+    "providerVersion": "4.14.0.0",
+    "toolVersion": "test"
+  },
+  "revision": null,
+  "target": {
+    "kind": "method",
+    "id": "M:Shop.Calculator.Percentage(System.Decimal,System.Int32)",
+    "name": "Percentage",
+    "containingType": "Shop.Calculator",
+    "namespace": "Shop",
+    "signature": "public decimal Percentage(decimal value, int percent)",
+    "accessibility": "public",
+    "modifiers": [],
+    "returnType": "decimal",
+    "parameters": [
+      {
+        "name": "value",
+        "type": "decimal",
+        "modifier": null,
+        "defaultValue": null
+      },
+      {
+        "name": "percent",
+        "type": "int",
+        "modifier": null,
+        "defaultValue": null
+      }
+    ]
+  },
+  "source": {
+    "file": "src/Shop/Calculator.cs",
+    "startLine": 29,
+    "endLine": 29,
+    "sha256": "765adb94000faad0755b7aa1e454dda3ba3681c6f0c0d34701fe19020d7e132c",
+    "truncated": false,
+    "documentation": null,
+    "excerpt": "public decimal Percentage(decimal value, int percent) => Percentage(value, (decimal)percent);\n"
+  },
+  "project": "src/Shop/Shop.csproj",
+  "members": [],
+  "constructors": [],
+  "dependencies": [],
+  "throws": [],
+  "relatedTests": [],
+  "unavailable": [
+    {
+      "field": "requirements",
+      "reason": "No requirement source is connected for the Roslyn provider."
+    },
+    {
+      "field": "coverage",
+      "reason": "Line/branch coverage is not measured; relatedTests are name references only."
+    }
+  ],
+  "diagnostics": []
+}
