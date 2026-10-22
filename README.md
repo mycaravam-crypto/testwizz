@@ -14,7 +14,7 @@ Status: early development. See [PLAN.md](PLAN.md) for the design and milestones.
 | `testwizz ai check [path]` | Check that the configured model is reachable, private, installed and returns schema-valid JSON. |
 | `testwizz context [path] --for <target>` | Show the `testwizz.context/v1` context for a C# type or method (signature, source excerpt, injected dependencies, thrown exceptions, related tests). |
 | `testwizz plan [path] --for <method> [--ai]` | Plan evidence-linked test scenarios (`testwizz.plan/v1`); `--ai` lets the local model propose more. |
-| `testwizz generate [path] --for <method> [--out <dir>] [--ai-plan]` | Plan, let the local model write xUnit tests, validate them and save a proposal bundle outside the repository. The repository is not changed. |
+| `testwizz generate [path] --for <method> [--out <dir>] [--ai-plan]` or `testwizz generate [path] --since <ref> [--for <method>]` | Plan, let the local model write xUnit tests, validate them and save a proposal bundle outside the repository. The repository is not changed. |
 | `testwizz run [path] --proposal <id> [--image <image>] [--timeout <s>]` | Build and run a proposal's tests in a Docker/Podman container with the network off; results go into the bundle. Never runs on the host. |
 
 Global options: `--format text|json`, `--help`, `--version`.
@@ -92,6 +92,15 @@ The planner builds an **evidence catalog** from the method (guards, thrown excep
 - Expectations that come only from the current code are `needsReview: true`, because the code may be wrong. An exception documented with `<exception cref=...>` is treated as confirmed.
 - Existing tests that look like they cover a scenario are listed in `possibleDuplicateOf` (name heuristics, not coverage).
 - With `--ai`, the model sees the repository data inside a block declared as untrusted, answers with schema-constrained JSON, and every proposed scenario must cite existing evidence ids. Anything else is dropped and reported under `findings`. AI scenarios are always marked for review. The plan records the model, its digest and the prompt version.
+
+## Changed-code generation (initial C# slice)
+
+```bash
+testwizz generate . --since origin/main --format json
+testwizz generate . --since origin/main --for Calculator.Divide --format json
+```
+
+`--since` uses `git diff <ref>...HEAD --unified=0` to identify methods whose new-side lines changed. One changed method can be selected automatically; when multiple methods changed, use `--for` to choose one. The full multi-target batch/CI summary, Vue changed-code support and framework adapters remain future work under [#12](https://github.com/mycaravam-crypto/testwizz/issues/12). This command still generates proposals outside the repo and does not post PR comments.
 
 ## Generate
 
