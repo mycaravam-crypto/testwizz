@@ -1,5 +1,7 @@
 using System.Reflection;
 using TestWizz.Cli.Commands;
+using TestWizz.Core.Configuration;
+using TestWizz.Core.Running;
 
 namespace TestWizz.Cli;
 
@@ -8,7 +10,8 @@ public sealed class CliApp(
     TextWriter stdout,
     TextWriter stderr,
     string workingDirectory,
-    Func<string, string?>? getEnvironmentVariable = null)
+    Func<string, string?>? getEnvironmentVariable = null,
+    Func<ContainerRuntime, IContainerRuntime>? containerRuntimes = null)
 {
     private readonly Func<string, string?> _getEnvironmentVariable = getEnvironmentVariable ?? Environment.GetEnvironmentVariable;
 
@@ -25,6 +28,7 @@ public sealed class CliApp(
         ContextCommand.Definition,
         PlanCommand.Definition,
         GenerateCommand.Definition,
+        RunCommand.Definition,
     ];
 
     public static IReadOnlyDictionary<string, CommandDefinition> CommandsByName { get; } =
@@ -62,7 +66,7 @@ public sealed class CliApp(
 
             var command = CommandsByName[parsed.CommandName];
             return command.Handler(new CommandContext(
-                command, parsed.Arguments, parsed.Options, output, workingDirectory, _getEnvironmentVariable, cancellationToken));
+                command, parsed.Arguments, parsed.Options, output, workingDirectory, _getEnvironmentVariable, cancellationToken, containerRuntimes));
         }
         catch (CliException ex)
         {

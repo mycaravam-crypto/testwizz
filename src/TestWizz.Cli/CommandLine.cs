@@ -1,3 +1,6 @@
+using TestWizz.Core.Configuration;
+using TestWizz.Core.Running;
+
 namespace TestWizz.Cli;
 
 public sealed record OptionDefinition(string Name, string Description, string? ValueName = null)
@@ -20,8 +23,13 @@ public sealed record CommandContext(
     CliOutput Output,
     string WorkingDirectory,
     Func<string, string?> GetEnvironmentVariable,
-    CancellationToken CancellationToken)
+    CancellationToken CancellationToken,
+    Func<ContainerRuntime, IContainerRuntime>? ContainerRuntimes = null)
 {
+    /// <summary>The container runtime to use; tests replace it with a fake.</summary>
+    public IContainerRuntime Runtime(ContainerRuntime runtime) =>
+        ContainerRuntimes?.Invoke(runtime) ?? new CliContainerRuntime(runtime);
+
     public bool Has(string option) => Options.ContainsKey(option);
 
     /// <summary>Resolves the optional path argument against the working directory; defaults to the working directory.</summary>

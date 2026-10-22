@@ -22,4 +22,7 @@ jobs:
       - run: dotnet restore
       - run: dotnet build --no-restore -c Release
       - run: dotnet test --no-build -c Release
+        env:
+          # The hosted runner has Docker; this enables the real-container tests for `testwizz run`.
+          TESTWIZZ_DOCKER_TESTS: 1
       - run: dotnet pack src/TestWizz.Cli --no-build -c Release -o artifacts

@@ -15,6 +15,7 @@ Status: early development. See [PLAN.md](PLAN.md) for the design and milestones.
 | `testwizz context [path] --for <target>` | Show the `testwizz.context/v1` context for a C# type or method (signature, source excerpt, injected dependencies, thrown exceptions, related tests). |
 | `testwizz plan [path] --for <method> [--ai]` | Plan evidence-linked test scenarios (`testwizz.plan/v1`); `--ai` lets the local model propose more. |
 | `testwizz generate [path] --for <method> [--out <dir>] [--ai-plan]` | Plan, let the local model write xUnit tests, validate them and save a proposal bundle outside the repository. The repository is not changed. |
+| `testwizz run [path] --proposal <id> [--image <image>] [--timeout <s>]` | Build and run a proposal's tests in a Docker/Podman container with the network off; results go into the bundle. Never runs on the host. |
 
 Global options: `--format text|json`, `--help`, `--version`.
 
@@ -122,6 +123,23 @@ testwizz generate . --for Calculator.Divide --out ~/proposals
 
 Exit code `1` means the proposal has errors; the bundle is still written so you can see why. Exit code `2` is a configuration or output-directory problem.
 
+## Run
+
+```bash
+testwizz run . --proposal shop-calculator-divide-5242ec6f86c4
+testwizz run . --proposal ../.testwizz-proposals/shop-calculator-divide-5242ec6f86c4 --format json
+```
+
+`run` needs Docker or Podman (`run.runtime` in `testwizz.json`). Without a working runtime it fails with exit code 2; it never falls back to running tests on the host.
+
+1. A throw-away copy of the repository is made in the system temp folder (tracked and untracked-but-not-ignored files, without `bin/`, `obj/`, `.git/`, and without symbolic links that point outside the repository). The repository itself is never mounted.
+2. **Restore** (`dotnet restore <test project>`, network on) sees only project and build files: `*.csproj`, `*.props`, `*.targets`, solutions, `global.json`, `nuget.config`, lock files.
+3. Then the sources and the proposed test file are added, and **build** and **test** run with `--network none`. Code from the repository and from the model only ever runs offline.
+4. Every container runs with all capabilities dropped, `no-new-privileges`, a read-only root file system, 2 CPUs, 4 GB memory, 1024 processes and an overall time limit (`--timeout`, default 600 s). Containers are removed on completion, timeout and Ctrl+C.
+5. Only the proposal's test class runs (`dotnet test --filter FullyQualifiedName~<Namespace>.<Class>.`). The image is `mcr.microsoft.com/dotnet/sdk:<version>` from the test project's target framework, or `--image` (for example an SDK image that trusts your corporate proxy's certificate).
+
+Results (`testwizz.run/v1`) are written to `<bundle>/run/`: `result.json`, `restore.log`, `build.log`, `test.log`, `results.trx`. They include the status (`passed`, `failed`, `compile-error`, `timeout`, `restore-failed`), compile errors with file, line, code and whether they are in the proposed file, and each test's outcome, message, stack trace and scenarios. Source files that changed since `generate` and bundle files edited by hand are reported. Exit codes: `0` passed, `1` failed, compile error or timeout, `2` restore failure or setup problem.
+
 ## Development
 
 Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download).
@@ -137,4 +155,4 @@ dotnet tool install --global TestWizz --add-source ./artifacts
 testwizz --version
 ```
 
-Layout: `src/TestWizz.Cli` (commands, output), `src/TestWizz.Core` (configuration, contracts, proposal bundle and stack-neutral checks), `src/TestWizz.AI` (model clients, endpoint guard, `ai check`), `src/TestWizz.DotNet` (Roslyn context provider, C# scenario extractor, xUnit conventions/generator/validator), `fixtures/dotnet` (sample solution used by golden tests; regenerate goldens with `TESTWIZZ_UPDATE_GOLDEN=1 dotnet test`), `tests/TestWizz.UnitTests` (xUnit v3; model servers are faked on loopback, so no real AI or network is needed).
+Layout: `src/TestWizz.Cli` (commands, output), `src/TestWizz.Core` (configuration, contracts, proposal bundle and stack-neutral checks), `src/TestWizz.AI` (model clients, endpoint guard, `ai check`), `src/TestWizz.DotNet` (Roslyn context provider, C# scenario extractor, xUnit conventions/generator/validator), `fixtures/dotnet` (sample solution used by golden tests; regenerate goldens with `TESTWIZZ_UPDATE_GOLDEN=1 dotnet test`), `tests/TestWizz.UnitTests` (xUnit v3; model servers are faked on loopback, so no real AI or network is needed). Tests that start real containers run only with `TESTWIZZ_DOCKER_TESTS=1` (set in CI); `TESTWIZZ_DOCKER_IMAGE` overrides the SDK image they use.
