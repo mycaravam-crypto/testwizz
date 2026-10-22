@@ -70,6 +70,7 @@ public static class GenerateCommand
                     ["schema"] = "testwizz.changed-targets/v1",
                     ["base"] = since,
                     ["count"] = targets.Count,
+                    ["risk"] = new JsonArray([.. ChangedCode.Ranked(root, since ?? "").Where(m => m.Risk >= minRisk).Select(m => (JsonNode?)new JsonObject { ["target"] = m.Target, ["score"] = m.Risk, ["reasons"] = new JsonArray([.. m.Reasons.Select(r => (JsonNode?)JsonValue.Create(r))]) })]),
                     ["targets"] = new JsonArray([.. targets.Select(t => (JsonNode?)JsonValue.Create(t))]),
                 };
                 var markdown = new StringBuilder("# Changed C# targets\n\n| Target |\n|---|\n");
@@ -79,7 +80,7 @@ public static class GenerateCommand
                 return ExitCodes.Success;
             }
             if (context.Has(AllChangedOption))
-                return RunBatch(context, targets, since ?? "");
+                return RunBatch(context, targets, since ?? "", minRisk);
 
             if (targets.Count == 0)
             {
@@ -168,7 +169,7 @@ public static class GenerateCommand
         return result.IsValid ? ExitCodes.Success : ExitCodes.ValidationFailed;
     }
 
-    private static int RunBatch(CommandContext context, IReadOnlyList<string> targets, string since)
+    private static int RunBatch(CommandContext context, IReadOnlyList<string> targets, string since, int minRisk)
     {
         if (targets.Count > MaxBatchTargets)
             throw new CliException("target.too_many", $"Changed methods: {targets.Count}; maximum is {MaxBatchTargets}. Narrow the Git comparison.");
@@ -210,6 +211,7 @@ public static class GenerateCommand
             rows.Add(new JsonObject
             {
                 ["target"] = target,
+                ["risk"] = ChangedCode.Ranked(context.PathArgument(), since).First(m => m.Target == target).Risk,
                 ["status"] = status,
                 ["proposal"] = proposalPath,
                 ["errorCode"] = errorCode,
@@ -226,6 +228,7 @@ public static class GenerateCommand
             ["base"] = since,
             ["total"] = targets.Count,
             ["failed"] = failed,
+            ["minRisk"] = minRisk,
             ["items"] = rows,
         }, markdown.ToString(), failed > 0 ? "failed" : "ok");
         return failed > 0 ? ExitCodes.ValidationFailed : ExitCodes.Success;
