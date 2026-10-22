@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json.Nodes;
 using System.Text;
 using TestWizz.AI;
 using TestWizz.Core.Configuration;
@@ -15,6 +16,7 @@ public static class GenerateCommand
     private const string AiPlanOption = "--ai-plan";
     private const string OutOption = "--out";
     private const string SinceOption = "--since";
+    private const string ListChangedOption = "--list-changed";
 
     public static CommandDefinition Definition { get; } = new(
         "generate",
@@ -26,6 +28,7 @@ public static class GenerateCommand
             new(OutOption, "Directory for proposal bundles (default: 'output' in testwizz.json). Must be outside the repository.", "dir"),
             new(AiPlanOption, "Also let the model propose extra scenarios before writing tests (same as plan --ai)."),
             new(SinceOption, "Find C# methods changed since this Git ref; generate only when exactly one matches.", "ref"),
+            new(ListChangedOption, "List changed C# methods without AI calls; suitable for CI."),
         ],
         MaxArguments: 1,
         Handler: Run);
@@ -33,6 +36,8 @@ public static class GenerateCommand
     private static int Run(CommandContext context)
     {
         var root = context.PathArgument();
+        if (context.Has(ListChangedOption) && !context.Has(SinceOption))
+            throw new CliException("usage", "--list-changed requires --since.");
         var config = ConfigCommand.Load(Path.Combine(root, TestWizzConfig.FileName));
         var settings = config.Ai;
         var output = context.Options.TryGetValue(OutOption, out var outText) && !string.IsNullOrWhiteSpace(outText)
@@ -61,6 +66,21 @@ public static class GenerateCommand
                 throw new CliException("git.diff", ex.Message);
             }
 
+            if (context.Has(ListChangedOption))
+            {
+                var report = new JsonObject
+                {
+                    ["schema"] = "testwizz.changed-targets/v1",
+                    ["base"] = since,
+                    ["count"] = targets.Count,
+                    ["targets"] = new JsonArray([.. targets.Select(t => (JsonNode?)JsonValue.Create(t))]),
+                };
+                var markdown = new StringBuilder("# Changed C# targets\n\n| Target |\n|---|\n");
+                foreach (var target in targets)
+                    markdown.Append("| `").Append(target.Replace("|", "\\|", StringComparison.Ordinal)).Append("` |\n");
+                context.Output.Result("generate", report, markdown.ToString());
+                return ExitCodes.Success;
+            }
             if (targets.Count == 0)
             {
                 throw new CliException("target.not_found", "No changed C# methods found for --since.");
