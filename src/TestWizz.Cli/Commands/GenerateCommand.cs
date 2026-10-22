@@ -17,6 +17,8 @@ public static class GenerateCommand
     private const string OutOption = "--out";
     private const string SinceOption = "--since";
     private const string ListChangedOption = "--list-changed";
+    private const string AllChangedOption = "--all-changed";
+    private const int MaxBatchTargets = 20;
 
     public static CommandDefinition Definition { get; } = new(
         "generate",
@@ -29,6 +31,7 @@ public static class GenerateCommand
             new(AiPlanOption, "Also let the model propose extra scenarios before writing tests (same as plan --ai)."),
             new(SinceOption, "Find C# methods changed since this Git ref; generate only when exactly one matches.", "ref"),
             new(ListChangedOption, "List changed C# methods without AI calls; suitable for CI."),
+            new(AllChangedOption, "Generate proposals for up to 20 changed C# methods and produce one CI summary."),
         ],
         MaxArguments: 1,
         Handler: Run);
@@ -36,8 +39,10 @@ public static class GenerateCommand
     private static int Run(CommandContext context)
     {
         var root = context.PathArgument();
-        if (context.Has(ListChangedOption) && !context.Has(SinceOption))
-            throw new CliException("usage", "--list-changed requires --since.");
+        if ((context.Has(ListChangedOption) || context.Has(AllChangedOption)) && !context.Has(SinceOption))
+            throw new CliException("usage", "--list-changed and --all-changed require --since.");
+        if (context.Has(AllChangedOption) && (context.Has(ListChangedOption) || context.Has("--for")))
+            throw new CliException("usage", "--all-changed cannot be combined with --list-changed or --for.");
         if (context.Has(SinceOption))
         {
             var since = context.Options[SinceOption];
@@ -66,6 +71,9 @@ public static class GenerateCommand
                 context.Output.Result("generate", report, markdown.ToString());
                 return ExitCodes.Success;
             }
+            if (context.Has(AllChangedOption))
+                return RunBatch(context, targets, since ?? "");
+
             if (targets.Count == 0)
             {
                 throw new CliException("target.not_found", "No changed C# methods found for --since.");
@@ -151,6 +159,69 @@ public static class GenerateCommand
         json["path"] = proposal.Directory;
         context.Output.Result("generate", json, ToText(result, proposal), result.IsValid ? "ok" : "failed");
         return result.IsValid ? ExitCodes.Success : ExitCodes.ValidationFailed;
+    }
+
+    private static int RunBatch(CommandContext context, IReadOnlyList<string> targets, string since)
+    {
+        if (targets.Count > MaxBatchTargets)
+            throw new CliException("target.too_many", $"Changed methods: {targets.Count}; maximum is {MaxBatchTargets}. Narrow the Git comparison.");
+        var rows = new JsonArray();
+        var markdown = new StringBuilder("# TestWizz changed-code generation\n\n");
+        markdown.Append("| Target | Status | Proposal |\n|---|---|---|\n");
+        var failed = 0;
+        foreach (var target in targets)
+        {
+            context.CancellationToken.ThrowIfCancellationRequested();
+            using var stdout = new StringWriter(CultureInfo.InvariantCulture);
+            var options = context.Options
+                .Where(option => option.Key is not (AllChangedOption or SinceOption))
+                .ToDictionary(option => option.Key, option => option.Value, StringComparer.Ordinal);
+            options["--for"] = target;
+            var inner = context with
+            {
+                Options = options,
+                Output = new CliOutput(stdout, context.Output.Stderr, OutputFormat.Json),
+            };
+            string status;
+            string? proposalPath = null;
+            string? errorCode = null;
+            try
+            {
+                var exitCode = Run(inner);
+                var response = JsonNode.Parse(stdout.ToString())!;
+                proposalPath = (string?)response["result"]?["path"];
+                status = exitCode == ExitCodes.Success ? "ok" : "failed";
+                if (exitCode != ExitCodes.Success) failed++;
+            }
+            catch (CliException ex)
+            {
+                status = "error";
+                errorCode = ex.Code;
+                failed++;
+            }
+
+            rows.Add(new JsonObject
+            {
+                ["target"] = target,
+                ["status"] = status,
+                ["proposal"] = proposalPath,
+                ["errorCode"] = errorCode,
+            });
+            markdown.Append("| `").Append(target.Replace("|", "\\|", StringComparison.Ordinal))
+                .Append("` | ").Append(status).Append(" | ")
+                .Append(proposalPath is null ? "—" : "`" + proposalPath.Replace("|", "\\|", StringComparison.Ordinal) + "`")
+                .Append(" |\n");
+        }
+        markdown.Append(CultureInfo.InvariantCulture, $"\n{targets.Count} target(s), {failed} failed. No repository files were modified.\n");
+        context.Output.Result("generate", new JsonObject
+        {
+            ["schema"] = "testwizz.generate-batch/v1",
+            ["base"] = since,
+            ["total"] = targets.Count,
+            ["failed"] = failed,
+            ["items"] = rows,
+        }, markdown.ToString(), failed > 0 ? "failed" : "ok");
+        return failed > 0 ? ExitCodes.ValidationFailed : ExitCodes.Success;
     }
 
     private static string ToText(GenerationResult r, Proposal proposal)
