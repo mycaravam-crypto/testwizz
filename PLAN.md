@@ -1,253 +1,154 @@
-# TestWizz — Technical Implementation Plan
+# TestWizz — Implementation Plan
 
-**Version:** 1.0  
-**Status:** Proposed; implementation backlog  
-**Owner:** TestWizz  
-**Target:** Claude Code / .NET 10  
-**Approach:** Independent CLI, incremental Scrum delivery
+**Version:** 2.0 · **Status:** Proposed · **Stack:** .NET 10 CLI · **Targets:** .NET (xUnit) and Vue 3 (Vitest)
 
-## 1. Mission and scope
+## 1. Mission
 
-Build **TestWizz**, a standalone AI-assisted unit-test engineering tool that consumes DocWizz's code intelligence, identifies candidate testing gaps, plans evidence-grounded scenarios, generates reviewable C# xUnit tests using a **private/local** AI model, and (in a later increment) validates proposals in a sandbox.
+TestWizz is a local CLI that writes **reviewable unit tests** for .NET and Vue applications using a **local AI model** (Ollama or any OpenAI-compatible server on your machine/LAN). No code leaves your network.
+
+```text
+pick target ─► gather context ─► plan scenarios ─► generate tests ─► validate ─► (run + repair) ─► review ─► apply
+```
 
 ### Goals
 
-1. Generate useful normal, boundary, negative, exception and regression scenarios with source and requirement evidence.
-2. Reuse DocWizz scanning, symbol relations, existing test traceability and change-impact data; do not copy its scanners.
-3. Reuse existing repository conventions, test frameworks, packages and naming patterns.
-4. Never overwrite target files or execute generated code without explicit authorization.
-5. Produce reviewable, versioned, reproducible proposals with explicit assumptions.
-6. Keep all model communication private and preserve credential/TLS safeguards.
-7. Integrate with developers' local workflows and, later, CI.
+1. Generate useful happy-path, boundary, negative and exception tests for a selected C# method/class or Vue component/composable/store.
+2. Follow the target project's existing conventions (framework, mocking library, naming, folder layout).
+3. Work well with **small local models**: tight per-target context, structured JSON output, deterministic pre-/post-processing.
+4. Never touch the working tree until the user runs `apply`; never run code outside an isolated container.
+5. Be honest: inferred expectations are flagged for review; a green test is not proof of correctness.
 
-### MVP non-goals
+### Non-goals (MVP)
 
-Integration/end-to-end tests; general autonomous coding; production-code edits; implicit test execution; public AI; arbitrary programming languages; guaranteed test correctness; guaranteed code-coverage improvement.
+Integration/E2E/browser tests, editing production code, cloud AI, languages other than C# and TypeScript/JavaScript (Vue), coverage guarantees.
 
-## 2. Architectural decisions
+## 2. Key decisions
 
-**ADR-001 — Separate CLI.** TestWizz is a separate product because test synthesis, patching, building and running tests introduce execution and safety boundaries absent in DocWizz. Use a .NET 10 CLI.
+| ID | Decision |
+|----|----------|
+| ADR-1 | **Single .NET 10 CLI** (`testwizz`), distributed as a `dotnet tool`. Vue-specific parsing is delegated to a small Node helper script that runs with the **target project's own** `@vue/compiler-sfc`/`typescript`, so TestWizz bundles no JS toolchain. |
+| ADR-2 | **Pluggable context providers.** .NET: DocWizz adapter when DocWizz is installed (preferred, reuse don't copy its scanners), Roslyn-based fallback otherwise. Vue: built-in SFC/TS provider. All map to one `testwizz.context/v1` contract. Missing data is represented as *unavailable*, never guessed. |
+| ADR-3 | **Stack adapters**, not a generic framework: `DotNet` (xUnit first; NUnit/MSTest later) and `Vue` (Vitest + `@vue/test-utils` first; Jest later). Each adapter owns convention detection, prompt templates, static validation and run commands. |
+| ADR-4 | **Local AI only.** Ollama and OpenAI-compatible endpoints restricted to loopback/private IPs (checked at connect time, no proxy, TLS validated when used). API keys only from environment variables; `.env` is never auto-loaded; no public fallback. |
+| ADR-5 | **AI output is untrusted.** Structured JSON schema (Ollama `format` / `response_format`), schema + evidence validation, and source comments/docs treated as data, not instructions. |
+| ADR-6 | **Proposals first.** `generate` writes a proposal bundle outside the working tree. `run` executes tests only inside a container (Docker/Podman, network disabled). `apply` is a separate explicit command with stale-source checks. |
 
-**ADR-002 — DocWizz adapter first.** Consume the existing `docwizz context . --for <symbol> --format json` and related interfaces where supported, preferably by invoking its process with explicit arguments and capturing bounded output. Investigate the real output schema in the installed version before implementing contracts; do not invent fields. If it is insufficient, propose the smallest versioned upstream schema extension. Existing DocWizz test links indicate relationships, **not** line/branch coverage.
+### Confirmed stack choices
 
-**ADR-003 — Hexagonal separation.** Core contracts and scenario rules are provider-agnostic; DocWizz access, AI inference, xUnit formatting and execution are adapters. Start with a minimal vertical slice; avoid empty projects/interfaces until needed.
+- **DocWizz** is available and is the primary .NET context source; the Roslyn provider remains as fallback.
+- **Docker** is available for isolated `run`.
+- **Vue projects:** Vue 3 + TypeScript, Vitest, Pinia (`@pinia/testing`).
+- **.NET tests (TestWizz itself and the default for generated tests):** xUnit v3, NSubstitute for mocks, plain xUnit `Assert` (no FluentAssertions; v8+ needs a commercial license). Convention detection still follows whatever a target project already uses (Moq, FluentAssertions, Shouldly…).
 
-**ADR-004 — AI is untrusted.** AI may propose expectations and test bodies but cannot declare them verified. Require provenance, schema validation and deterministic checks. Mark behavior inferred solely from code as **needs review**, since implementation may be defective.
-
-**ADR-005 — Local AI only.** Support self-hosted Ollama and OpenAI-compatible servers on loopback/private IPs. Enforce DNS/IP checks at connection time, redirects and proxy avoidance; validate TLS; never log keys. Read `api_key_env` from process environment (do not automatically source `.env`). No public inference fallback.
-
-**ADR-006 — Preview first, execution later.** Generate into a separate proposal location; do not change the target checkout. Applying a patch or running a build/test requires a separate explicit operation. Temporary filesystem copying alone is not a security sandbox.
-
-## 3. Logical components and data flow
-
-```text
-Developer / CI
-   -> TestWizz CLI (argument validation, JSON output, exit codes)
-   -> Orchestrator
-      -> DocWizz Adapter -> versioned source/requirement/test context
-      -> Project Inspector -> framework and fixture conventions
-      -> Scenario Planner -> evidence-based cases + unresolved assumptions
-      -> AI Provider (optional, private) -> structured test proposal
-      -> Validators -> evidence, schema, Roslyn, file paths, assertions
-      -> Proposal Writer -> external output bundle / patch
-      -> [future, explicit] Sandbox Validator -> build/test results
-      -> [future, explicit] Patch Applier -> guarded changes
-```
-
-Recommended eventual solution layout:
+## 3. Architecture
 
 ```text
-src/TestWizz.Cli/
-src/TestWizz.Core/
-src/TestWizz.DocWizz/
-src/TestWizz.AI/
-src/TestWizz.Frameworks.XUnit/
-src/TestWizz.Execution/           # introduced in Sprint 4
+src/TestWizz.Cli/          commands, config, JSON output, exit codes
+src/TestWizz.Core/         contracts, scenario planner, proposal bundle, validators
+src/TestWizz.AI/           Ollama + OpenAI-compatible clients, endpoint guard, prompt rendering
+src/TestWizz.DotNet/       Roslyn/DocWizz context, xUnit conventions + generator, dotnet test runner
+src/TestWizz.Vue/          Node helper (scripts/vue-context.mjs), Vitest conventions + generator, vitest runner
 tests/TestWizz.UnitTests/
-tests/TestWizz.ComponentTests/
-tests/TestWizz.IntegrationTests/
-tests/TestWizz.GoldenTests/
-fixtures/
-docs/
-PLAN.md
-README.md
+tests/TestWizz.ComponentTests/   fake DocWizz, fake AI server, fake container runtime
+fixtures/dotnet/           calculator, service with DI, exceptions (xUnit v3 + NSubstitute)
+fixtures/vue/              TS SFC with props/emits, composable, Pinia store (Vitest)
 ```
 
-Avoid speculative abstractions in Sprint 1. The first deliverable is only the context adapter, an internal contract and deterministic CLI report.
+Start with the fewest projects that work; split only when a second consumer appears.
 
-## 4. Domain model and versioned contracts
+## 4. Contracts
 
-Design a `testwizz.context/v1` JSON contract with:
+**`testwizz.context/v1`** — repository root + git revision; stack (`dotnet` | `vue`); target identity (symbol/overload, or component/composable/store name); source file, line range, content hash and bounded excerpt; public surface (signature, or props/emits/slots/exposed); dependencies (constructor params, injected services, imported modules, stores, router, HTTP clients); existing related tests (relationship, **not coverage**); requirements if available; list of unavailable fields.
 
-- repository identity and revision/hash; selected target symbol and overload identity;
-- source file, signature and bounded source excerpt with line references;
-- dependencies, constructor requirements and discovered side effects;
-- existing linked tests (relationship evidence, not measured coverage);
-- optionally linked work-item requirements with confidence, provenance and ambiguity;
-- diagnostic findings and unavailable fields.
+**`testwizz.plan/v1`** — scenarios with `id`, `category` (HappyPath, Boundary, Negative, Exception, StateTransition, Regression), description, expected behavior, evidence references, `source` (`deterministic` | `ai`), `needsReview`.
 
-Example C# internal records (adapt to verified DocWizz data):
+**`testwizz.proposal/v1`** — proposal id, context/plan hashes, model + prompt-template version, generated files (path, content, linked scenario ids), findings (validation warnings/errors), optional run results.
 
-```csharp
-public sealed record TestGenerationRequest(
-    string RepositoryPath, string TargetSymbol, string Framework,
-    bool IncludeExistingTests, string OutputDirectory);
-
-public sealed record SourceContext(
-    string SymbolId, string SourceFile, string Signature, string SourceCode,
-    IReadOnlyList<DependencyInfo> Dependencies,
-    IReadOnlyList<ExistingTestInfo> ExistingTests,
-    IReadOnlyList<RequirementEvidence> Requirements);
-
-public enum ScenarioCategory {
-    HappyPath, Boundary, Negative, Exception, StateTransition, Regression
-}
-
-public sealed record TestScenario(
-    string Id, string TargetSymbol, ScenarioCategory Category,
-    string Description, string ExpectedBehavior,
-    IReadOnlyList<string> EvidenceReferences, bool RequiresHumanReview);
-```
-
-Additional types must represent missing/unavailable evidence without silently substituting guessed values. Proposals must have a unique ID, schema version, model/provider identity, prompt fingerprint, input hashes, source revision and outcomes.
-
-## 5. CLI contract (target design; not currently implemented)
+## 5. CLI
 
 ```bash
-testwizz help
-testwizz ai check .
-testwizz analyze .
-testwizz context . --for "OrderService" --format json
-testwizz generate . --for "OrderService" --framework xunit
-testwizz generate . --since origin/main
-testwizz validate . --proposal <id>
-testwizz apply . --proposal <id>
+testwizz init                         # write testwizz.json (model endpoint, stack hints)
+testwizz ai check                     # verify local model is reachable and returns valid JSON
+testwizz context <path> --for <target> [--format json]
+testwizz plan    <path> --for <target>
+testwizz generate <path> --for <target> [--out <dir>]   # context + plan + tests → proposal
+testwizz run      --proposal <id>     # container-only build/test + bounded repair
+testwizz apply    --proposal <id>     # copy files into repo after stale checks
+testwizz generate <path> --since origin/main            # later: changed targets only
 ```
 
-Implement only relevant commands per sprint. `--format json` must emit a versioned JSON object on stdout; diagnostics belong on stderr. Exit 0 for success, 1 for failed validation/proposal rejection, 2 for invalid configuration or execution errors. Document help, compatibility and negative argument cases.
+Targets: `OrderService.PlaceOrder`, `OrderService` (all public methods), `src/components/CartItem.vue`, `src/composables/useCart.ts`, `src/stores/cart.ts`.
 
-## 6. Functional workflow
+`--format json` writes one versioned JSON object to stdout; diagnostics go to stderr. Exit codes: `0` success, `1` validation/test failure, `2` configuration or runtime error.
 
-### F1 — Acquire source context
+Example `testwizz.json`:
 
-Resolve symbols and overloads with DocWizz; validate the installed CLI's actual schema and output. Reject unknown or ambiguous targets with options. Verify source hashes before using cached context. Bound context size and avoid reading ignored/out-of-scope files.
+```json
+{
+  "ai": { "provider": "ollama", "endpoint": "http://127.0.0.1:11434", "model": "qwen2.5-coder:14b",
+          "apiKeyEnv": null, "timeoutSeconds": 120, "maxContextTokens": 16000 },
+  "run": { "runtime": "docker", "maxRepairAttempts": 2 },
+  "output": "../.testwizz-proposals"
+}
+```
 
-### F2 — Analyze test candidates
+## 6. Workflow
 
-Identify unlinked high-risk methods, complexity/branches, public API paths, side effects and recently changed methods. Label each signal detected or inferred. Existing test traceability must never be called measured coverage.
+1. **Context.** Resolve the target; on ambiguity return candidate ids. Keep only what the model needs: the target's source, signatures (not bodies) of its dependencies, one or two nearby existing tests as style examples. Respect `.gitignore`; cap size by token budget.
+2. **Conventions.** .NET: test project referencing the target project, xUnit version, mocking lib (Moq/NSubstitute/FakeItEasy), assertion lib (FluentAssertions/Shouldly/plain), naming pattern. Vue: `vitest` config, `@vue/test-utils`, `@pinia/testing`, `happy-dom`/`jsdom`, test file location (`__tests__/` vs `*.spec.ts`). Never add packages; report what's missing.
+3. **Plan.** Deterministic extraction first (guard clauses, `throw`, `switch`/`if` branches, comparisons, props validators, `emit` calls, `watch`/computed). The AI then enriches the plan with structured output. Expectations derived only from current code are marked `needsReview`.
+4. **Generate.** One prompt per target (or per method for large classes) using a versioned template per stack, plan + context + style example, JSON schema output `{ files[], scenarioIds, assumptions }`.
+5. **Static validation.** Schema and scenario links; path confinement (no traversal or symlink escapes); no overwrite of existing files; C# parsed with Roslyn; TS/Vue parsed via the Node helper; references to non-existent members flagged; empty/placeholder/skipped assertions flagged.
+6. **Run + repair (opt-in).** Copy repo + proposal into a container (`mcr.microsoft.com/dotnet/sdk` or `node`), restore dependencies, then run `dotnet test` / `vitest run` **with network disabled**. Parse results (TRX / Vitest JSON reporter). On compile or test failure feed diagnostics back to the model at most `maxRepairAttempts` times; repairs may only change generated test files and may not delete assertions or add skips. If a test still fails, keep it in the proposal, marked as a possible bug *or* bad test.
+7. **Review + apply.** Proposal bundle contains `manifest.json`, `plan.md`, test files, `changes.patch`, `findings.md`. `apply` refuses if source hashes changed or a target file already exists.
 
-### F3 — Plan scenarios
+## 7. Local model guidance
 
-Produce a structured plan before source code. Prefer deterministic discovery of explicit null/argument checks, comparisons, switch cases and exceptions. Include happy path, boundary, negative and exceptional cases as supported by evidence. Each scenario records expected behavior, evidence, confidence, assumptions and review status. If only current code supports expected behavior, label it inferred/needs-review; missing requirements must not become fabricated assertions.
+- Use a code-tuned instruct model that supports JSON/structured output. Candidates to benchmark: Qwen2.5-Coder 7B/14B/32B, DeepSeek-Coder-V2-Lite, Codestral. Pick per hardware; the benchmark (§9) decides the default.
+- Small models degrade fast with long prompts: keep context per target and prefer several small calls over one large one.
+- Temperature 0–0.2; set `num_ctx` explicitly for Ollama (its default is small).
+- Record model name and digest in each proposal so results are reproducible.
 
-### F4 — AI synthesis
+## 8. Safety rules (always on)
 
-Once structured scenarios have passed checks, call a private/local model with bounded source context and a stable prompt version. Require structured schema containing test files, linked scenario IDs, dependency assumptions and uncertainty notes. Treat prompt inputs (source comments, work items, docs) as untrusted data; ignore embedded instructions.
+- Only loopback/private endpoints; DNS re-checked per connection; proxies bypassed for model calls; no secrets in logs, prompts or output.
+- No writes to the working tree except via `apply`; no execution outside a container; fail closed if no container runtime.
+- Source text is untrusted prompt input; embedded instructions are ignored and covered by regression tests.
+- Timeouts, cancellation and token budgets on every AI call; AI unavailability never corrupts state.
 
-### F5 — Validate generated files
+## 9. Verification
 
-Validate JSON, evidence IDs, target signatures, path confinement, file names, source safety, duplicate tests, framework references and Roslyn C# syntax. Flag skipped tests, placeholder assertions, weak/no assertions, unnecessary mocking and unapproved packages. A syntactically valid test is not automatically behaviorally correct.
+- **Unit:** config/arg parsing, endpoint guard, path confinement, scenario extraction, schema validation, hash/staleness checks.
+- **Component (offline, CI):** fake AI server (valid, malformed, empty, timeout, prompt injection), fake DocWizz CLI, fake container runtime.
+- **Fixture/golden:** `fixtures/dotnet` and `fixtures/vue` produce stable context and plan JSON (timestamps/order normalized).
+- **Model benchmark (manual/nightly, local):** per model, on both fixture sets: compile/parse rate, pass rate after repair, assertion quality, unsupported-assertion ratio, optional mutation score (Stryker.NET / StrykerJS). Test count alone is not quality.
 
-### F6 — Produce proposal
+## 10. Milestones
 
-Write a manifest, scenario plan, proposed test files, patch and quality findings **outside the target checkout** by default. Never overwrite existing files. Bind proposals to the exact source hashes and explicit target root; refuse stale proposals on apply.
+Each milestone ends with something a developer can actually use.
 
-### F7 — Optional isolated execution (post-MVP)
+| Milestone | Delivers | Issues |
+|-----------|----------|--------|
+| **M0 — Foundation** | CLI skeleton, config, CI; local AI client + `ai check` | #1, #5 |
+| **M1 — .NET slice** | `context` / `plan` / `generate` for C# → xUnit proposal bundle with static validation | #2, #4, #7, #8 |
+| **M2 — Vue slice** | Same flow for Vue SFCs, composables and Pinia stores → Vitest proposals | #3, #6 |
+| **M3 — Run, repair, apply** | Container-isolated `run` for both stacks, bounded repair loop, guarded `apply` | #9, #10 |
+| **M4 — Workflow** | `--since` changed-code mode, CI report output, more frameworks (NUnit/MSTest/Jest) | #12 |
+| Cross-cutting | Quality benchmark + security regression suite, grows each milestone | #11 |
 
-Only with explicit opt-in and a suitable sandbox: create a restricted workspace, apply patch there, build affected test project, run selected tests, parse results, and report compile/test failures separately. Enforce filesystem/network/process/resource restrictions. If isolation is unavailable, do not run untrusted code. At most two repair retries; changes restricted to generated test files; never weaken tests to achieve a green result.
+## 11. Definition of Done
 
-## 7. Security design (ISO 27001 CIA aligned)
+- Unit, component and fixture tests pass in CI (no real AI or network needed).
+- Help text and README updated for new commands.
+- Deterministic output for unchanged non-AI input.
+- Errors are actionable and contain no secrets.
+- No implicit execution, package installation or working-tree changes.
+- Uncertainty (`needsReview`, unavailable fields, failing tests) is visible in the output, never hidden.
 
-**Confidentiality:** Private model hosts only, DNS/IP validation for each connection, no proxy bypass leakage, TLS trust, credentials only via environment, logging redaction, bounded context and no secret values in prompts/results. `.env` is never loaded automatically.
+## 12. Notes for Claude Code
 
-**Integrity:** Reviewable outputs, no production changes, source hashes and stale-proposal rejection, strict target-root/path checks and symlink handling, prompt-injection defenses and schema validation. Build/test results never justify altering production logic.
-
-**Availability:** Token budgets, per-request timeout, cancellation, bounded concurrency/retries and controlled failure when AI or DocWizz is unavailable.
-
-**Execution boundary:** Treat test code and build scripts as untrusted. A temporary directory is not a sandbox. Use explicitly configured isolation and fail closed if unavailable.
-
-## 8. Quality characteristics (ISO/IEC 25010)
-
-- **Functional suitability:** Evidence-backed scenarios test behavior rather than mirror implementation.
-- **Reliability:** Provider failures and invalid outputs cannot mutate a working checkout.
-- **Security:** Strict private AI, secret handling and patch boundaries.
-- **Maintainability:** Stable contracts, adapters, small deterministic testable core.
-- **Performance efficiency:** Token/context budgets, caching by source/requirements/model/prompt hash.
-- **Usability:** Actionable CLI errors, explicit assumptions, explainable proposals.
-- **Compatibility/flexibility:** xUnit first, extensible framework adapters later.
-
-No assertion of formal ISO/IEC compliance without separate evaluation.
-
-## 9. Verification strategy
-
-**Unit:** CLI parsing, path confinement, scenario classification, evidence validation, schema checking, duplicate detection, source-hash matching.
-
-**Component (offline):** Fake DocWizz CLI outputs and loopback fake AI for success, malformed JSON, empty response, unknown symbol, prompt injection, unsupported citations, missing key/model and non-private destinations.
-
-**Integration:** Synthetic C# fixtures (calculator, service, dependency injection, exceptions) with existing xUnit conventions. Verify no checkout modifications, source references and generated C# syntax.
-
-**Golden:** Stable, versioned context and scenario report fixtures; normalize nondeterministic timestamps and ordering.
-
-**Later isolated E2E:** Explicit sandbox execution with compilation/test result parsing and no unauthorized writes or network calls.
-
-**Quality evaluation:** Scenario precision against hand-reviewed ground truth; assertion quality; compile pass ratio; duplicate and unsupported-assertion ratios; optional mutation score. Test count or green tests alone are not quality proof.
-
-## 10. Scrum backlog and milestones
-
-### Sprint 1 — CLI foundation and DocWizz context integration
-
-- .NET 10 repo/solution, CLI help and JSON output.
-- Inspect actual DocWizz context/MCP schema, write adapter compatibility spec.
-- Resolve C# target method into versioned `testwizz.context/v1`.
-- Deterministic source-evidence report, unit/component tests and CI.
-- **Exit criterion:** A selected method yields a validated, reproducible context report; no AI and no target code changes.
-
-### Sprint 2 — Scenario planning and private AI
-
-- Deterministic scenario extraction and uncertainty model.
-- Private-model configuration, endpoint restrictions and `ai check`.
-- Structured scenario enrichment with fake-model tests and prompt-injection checks.
-- **Exit criterion:** Evidence-linked scenario report with explicit review flags; no generated test source.
-
-### Sprint 3 — xUnit proposal generation
-
-- Detect xUnit project conventions, create code from approved scenarios.
-- Roslyn syntax, duplicate and assertion checks.
-- Reviewable versioned proposal bundle and patch without modifying target checkout.
-- Golden-fixture regressions.
-- **Exit criterion:** Valid syntactic C# xUnit proposals and safe patch preview.
-
-### Sprint 4 — Sandbox validation and guarded apply
-
-- Isolated, explicitly authorized build and test execution.
-- Diagnostic report; bounded repairs constrained to generated tests.
-- Source-hash guards and review-required patch application.
-- Security, integration and E2E tests.
-- **Exit criterion:** Safe and repeatable validation with audited user consent.
-
-### Later work
-
-- `--since` prioritization, CI reporting, NUnit/MSTest/JUnit/Jest/Vitest adapters, measured coverage and mutation-testing imports.
-
-## 11. Cross-cutting Definition of Done
-
-- Targeted unit/component tests and fixture regressions pass.
-- User-facing command help and documentation updated.
-- CLI is deterministic for unchanged non-AI input.
-- Error codes and messages are actionable and contain no secrets.
-- No implicit execution, package installation or modifications of production files.
-- Source/code provenance and uncertainty are explicit.
-- Code review assesses ISO/IEC 25010 quality attributes and confidentiality/integrity/availability risks.
-- Incomplete capabilities remain visibly incomplete; no false claim of functional coverage or requirement verification.
-
-## 12. Specific instructions for Claude Code
-
-1. Inspect the repository and current DocWizz contract before authoring integrations; report actual fields and missing evidence.
-2. Implement **Sprint 1 only** in the first PR, with a minimal vertical slice and tests.
-3. Do not import or fork DocWizz scanners. If a needed field is absent, document the contract gap and propose the smallest upstream change.
-4. Use reviewable changes and small commits. Avoid speculative interfaces and adding framework dependencies without justification.
-5. Never allow AI to edit production code or execute tests in the first increment.
-6. Report build/test results honestly. Do not remove failing assertions, skip tests, or assume CLI/AI endpoints exist.
-7. Include links to the relevant backlog issue(s) in each PR and update this plan as decisions evolve.
-
-**First actionable task:** implement a .NET 10 CLI that obtains a selected C# method's **actual** DocWizz context, maps it into `testwizz.context/v1`, and writes a deterministic JSON report with provenance, backed by offline adapter tests. No AI generation until this contract is proven.
+1. Implement one issue per PR, starting with #1; link the issue in the PR.
+2. Before writing the DocWizz adapter, inspect the installed DocWizz's real output; don't invent fields. If DocWizz is absent, the Roslyn fallback is the path.
+3. Avoid speculative abstractions and unjustified dependencies.
+4. Report build/test results honestly; never delete assertions or skip tests to get green.
+5. Update this plan when a decision changes.
