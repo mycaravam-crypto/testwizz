@@ -77,7 +77,7 @@ public static class GenerateCommand
                 };
                 var markdown = new StringBuilder("# Changed C# targets\n\n| Target |\n|---|\n");
                 foreach (var target in targets)
-                    markdown.Append("| `").Append(target.Replace("|", "\\|", StringComparison.Ordinal)).Append("` |\n");
+                    markdown.Append("| `").Append(target.Replace("|", "\\\\|", StringComparison.Ordinal)).Append("` |\n");
                 context.Output.Result("generate", report, markdown.ToString());
                 return ExitCodes.Success;
             }
