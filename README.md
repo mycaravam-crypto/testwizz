@@ -96,11 +96,12 @@ The planner builds an **evidence catalog** from the method (guards, thrown excep
 ## Changed-code generation (initial C# slice)
 
 ```bash
-testwizz generate . --since origin/main --format json
+testwizz generate . --since origin/main --list-changed --format json
+testwizz generate . --since origin/main --list-changed --format text
 testwizz generate . --since origin/main --for Calculator.Divide --format json
 ```
 
-`--since` uses `git diff <ref>...HEAD --unified=0` to identify methods whose new-side lines changed. One changed method can be selected automatically; when multiple methods changed, use `--for` to choose one. The full multi-target batch/CI summary, Vue changed-code support and framework adapters remain future work under [#12](https://github.com/mycaravam-crypto/testwizz/issues/12). This command still generates proposals outside the repo and does not post PR comments.
+`--since` uses `git diff <ref>...HEAD --unified=0` to identify methods whose new-side lines changed. With `--list-changed`, the sorted list of method targets is returned as a deterministic CI-friendly JSON object or Markdown table without contacting the AI endpoint. One changed method can be selected automatically; when multiple methods changed, use `--for` to choose one. The full multi-target batch/CI summary, Vue changed-code support and framework adapters remain future work under [#12](https://github.com/mycaravam-crypto/testwizz/issues/12). This command still generates proposals outside the repo and does not post PR comments.
 
 ## Generate
 
