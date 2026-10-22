@@ -33,6 +33,13 @@ Integration/E2E/browser tests, editing production code, cloud AI, languages othe
 | ADR-5 | **AI output is untrusted.** Structured JSON schema (Ollama `format` / `response_format`), schema + evidence validation, and source comments/docs treated as data, not instructions. |
 | ADR-6 | **Proposals first.** `generate` writes a proposal bundle outside the working tree. `run` executes tests only inside a container (Docker/Podman, network disabled). `apply` is a separate explicit command with stale-source checks. |
 
+### Confirmed stack choices
+
+- **DocWizz** is available and is the primary .NET context source; the Roslyn provider remains as fallback.
+- **Docker** is available for isolated `run`.
+- **Vue projects:** Vue 3 + TypeScript, Vitest, Pinia (`@pinia/testing`).
+- **.NET tests (TestWizz itself and the default for generated tests):** xUnit v3, NSubstitute for mocks, plain xUnit `Assert` (no FluentAssertions; v8+ needs a commercial license). Convention detection still follows whatever a target project already uses (Moq, FluentAssertions, Shouldly…).
+
 ## 3. Architecture
 
 ```text
@@ -43,8 +50,8 @@ src/TestWizz.DotNet/       Roslyn/DocWizz context, xUnit conventions + generator
 src/TestWizz.Vue/          Node helper (scripts/vue-context.mjs), Vitest conventions + generator, vitest runner
 tests/TestWizz.UnitTests/
 tests/TestWizz.ComponentTests/   fake DocWizz, fake AI server, fake container runtime
-fixtures/dotnet/           calculator, service with DI, exceptions (xUnit + Moq/NSubstitute)
-fixtures/vue/              SFC with props/emits, composable, Pinia store (Vitest)
+fixtures/dotnet/           calculator, service with DI, exceptions (xUnit v3 + NSubstitute)
+fixtures/vue/              TS SFC with props/emits, composable, Pinia store (Vitest)
 ```
 
 Start with the fewest projects that work; split only when a second consumer appears.
