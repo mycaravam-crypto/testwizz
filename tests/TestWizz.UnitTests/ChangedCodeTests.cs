@@ -30,6 +30,16 @@ public sealed class ChangedCodeTests
         }
     }
 
+    [Fact]
+    public void ListChanged_RequiresSince()
+    {
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+        var app = new TestWizz.Cli.CliApp(stdout, stderr, Path.GetTempPath());
+        Assert.Equal(TestWizz.Cli.ExitCodes.Error, app.Run(["generate", "--list-changed"]));
+        Assert.Contains("--since", stderr.ToString(), StringComparison.Ordinal);
+    }
+
     private static string Git(string root, params string[] arguments)
     {
         var info = new ProcessStartInfo("git")
