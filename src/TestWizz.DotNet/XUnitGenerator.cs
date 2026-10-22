@@ -6,6 +6,7 @@ using TestWizz.Core.Configuration;
 using TestWizz.Core.Context;
 using TestWizz.Core.Generation;
 using TestWizz.Core.Planning;
+using TestWizz.Core.Proposals;
 
 namespace TestWizz.DotNet;
 
@@ -172,6 +173,8 @@ public static class XUnitGenerator
 
         var (tests, validation) = XUnitValidator.Validate(provider, code, conventions.FilePath, conventions, [.. plan.Scenarios.Select(s => s.Id)]);
         findings.AddRange(validation);
+        var files = new[] { new GeneratedFile(conventions.FilePath, code) };
+        findings.AddRange(ProposalChecks.Check(provider.Root, files, tests));
 
         return new GenerationResult(
             "dotnet",
@@ -180,7 +183,7 @@ public static class XUnitGenerator
             PlanJson.ContextHash(context),
             generator,
             conventions.ToJson(),
-            [new GeneratedFile(conventions.FilePath, code)],
+            files,
             tests,
             assumptions,
             findings);

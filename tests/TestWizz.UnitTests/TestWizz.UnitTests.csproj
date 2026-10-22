@@ -29,4 +29,10 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Golden proposal bundles contain generated test sources; they are data, not part of this project. -->
+    <Compile Remove="Golden/**" />
+    <None Remove="Golden/**" />
+  </ItemGroup>
+
 </Project>

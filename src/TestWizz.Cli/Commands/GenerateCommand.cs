@@ -5,6 +5,7 @@ using TestWizz.Core.Configuration;
 using TestWizz.Core.Context;
 using TestWizz.Core.Generation;
 using TestWizz.Core.Planning;
+using TestWizz.Core.Proposals;
 using TestWizz.DotNet;
 
 namespace TestWizz.Cli.Commands;
@@ -12,14 +13,16 @@ namespace TestWizz.Cli.Commands;
 public static class GenerateCommand
 {
     private const string AiPlanOption = "--ai-plan";
+    private const string OutOption = "--out";
 
     public static CommandDefinition Definition { get; } = new(
         "generate",
-        "Plan scenarios and let the local model write xUnit tests for a C# method. Prints the proposal; nothing is written or run.",
-        "testwizz generate [path] --for <method> [--ai-plan] [--max-chars <n>]",
+        "Plan scenarios, let the local model write xUnit tests for a C# method and save them as a proposal bundle outside the repository. Nothing in the repository is changed, built or run.",
+        "testwizz generate [path] --for <method> [--out <dir>] [--ai-plan] [--max-chars <n>]",
         Options:
         [
             .. ContextCommand.TargetOptions,
+            new(OutOption, "Directory for proposal bundles (default: 'output' in testwizz.json). Must be outside the repository.", "dir"),
             new(AiPlanOption, "Also let the model propose extra scenarios before writing tests (same as plan --ai)."),
         ],
         MaxArguments: 1,
@@ -28,12 +31,27 @@ public static class GenerateCommand
     private static int Run(CommandContext context)
     {
         var root = context.PathArgument();
-        var settings = ConfigCommand.Load(Path.Combine(root, TestWizzConfig.FileName)).Ai;
+        var config = ConfigCommand.Load(Path.Combine(root, TestWizzConfig.FileName));
+        var settings = config.Ai;
+        var output = context.Options.TryGetValue(OutOption, out var outText) && !string.IsNullOrWhiteSpace(outText)
+            ? Path.GetFullPath(outText, context.WorkingDirectory)
+            : Path.GetFullPath(config.Output, root);
+        try
+        {
+            // Checked again when writing; failing here avoids a slow model call that could not be saved.
+            ProposalBundle.EnsureOutsideRepository(root, output);
+        }
+        catch (ProposalException ex)
+        {
+            throw new CliException(ex.Code, ex.Message);
+        }
+
         var document = ContextCommand.Load(context, Definition.Usage);
         var provider = RoslynContextProvider.Load(root);
         var extractor = new CSharpScenarioExtractor();
 
         GenerationResult result;
+        PlanDocument plan;
         try
         {
             var extraction = extractor.Extract(document);
@@ -41,7 +59,7 @@ public static class GenerateCommand
             var enrichment = context.Has(AiPlanOption)
                 ? ScenarioEnricher.EnrichAsync(client, document, extraction, context.CancellationToken).GetAwaiter().GetResult()
                 : null;
-            var plan = ScenarioPlanner.Create(document, extractor.Version, extraction, enrichment);
+            plan = ScenarioPlanner.Create(document, extractor.Version, extraction, enrichment);
             var conventions = XUnitConventions.Detect(root, document);
             if (conventions.Findings.FirstOrDefault(f => f.Severity == "error") is { } blocking)
             {
@@ -62,19 +80,31 @@ public static class GenerateCommand
                 ex.IsConfigurationError ? ExitCodes.Error : ExitCodes.ValidationFailed);
         }
 
-        context.Output.Result("generate", GenerationJson.ToJson(result), ToText(result), result.IsValid ? "ok" : "failed");
+        Proposal proposal;
+        try
+        {
+            proposal = ProposalBundle.Write(root, output, document, plan, result);
+        }
+        catch (ProposalException ex)
+        {
+            throw new CliException(ex.Code, ex.Message);
+        }
+
+        var json = proposal.Manifest.DeepClone().AsObject();
+        json["path"] = proposal.Directory;
+        context.Output.Result("generate", json, ToText(result, proposal), result.IsValid ? "ok" : "failed");
         return result.IsValid ? ExitCodes.Success : ExitCodes.ValidationFailed;
     }
 
-    private static string ToText(GenerationResult r)
+    private static string ToText(GenerationResult r, Proposal proposal)
     {
         var text = new StringBuilder();
-        text.Append(CultureInfo.InvariantCulture, $"Proposed tests for {r.TargetSignature}\n");
+        text.Append(CultureInfo.InvariantCulture, $"Proposal {proposal.Id} for {r.TargetSignature}\n");
         text.Append(CultureInfo.InvariantCulture, $"Model: {r.Generator.Provider} {r.Generator.Model} · prompt {r.Generator.PromptTemplate}\n");
         text.Append(CultureInfo.InvariantCulture, $"Test project: {(string?)r.Conventions["testProject"] ?? "(none found)"} · mocking: {(string?)r.Conventions["mocking"] ?? "none"} · assertions: {(string?)r.Conventions["assertions"]}\n");
         foreach (var file in r.Files)
         {
-            text.Append(CultureInfo.InvariantCulture, $"\n--- {file.Path} ---\n{file.Content}");
+            text.Append(CultureInfo.InvariantCulture, $"Proposed file: {file.Path}\n");
         }
 
         text.Append("\nTests:\n");
@@ -102,7 +132,9 @@ public static class GenerateCommand
         }
 
         text.Append(r.IsValid ? "\nResult: OK" : "\nResult: FAILED (see errors above)");
-        text.Append(". Nothing was written to disk and nothing was built or run.\n");
+        text.Append(". The repository was not changed and nothing was built or run.\n");
+        text.Append(CultureInfo.InvariantCulture, $"Bundle: {proposal.Directory}\n");
+        text.Append(CultureInfo.InvariantCulture, $"Review {Path.Combine(proposal.Directory, "findings.md")} and {Path.Combine(proposal.Directory, "changes.patch")}.\n");
         return text.ToString();
     }
 }
