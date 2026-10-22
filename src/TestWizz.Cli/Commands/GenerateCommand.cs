@@ -14,16 +14,18 @@ public static class GenerateCommand
 {
     private const string AiPlanOption = "--ai-plan";
     private const string OutOption = "--out";
+    private const string SinceOption = "--since";
 
     public static CommandDefinition Definition { get; } = new(
         "generate",
         "Plan scenarios, let the local model write xUnit tests for a C# method and save them as a proposal bundle outside the repository. Nothing in the repository is changed, built or run.",
-        "testwizz generate [path] --for <method> [--out <dir>] [--ai-plan] [--max-chars <n>]",
+        "testwizz generate [path] (--for <method> | --since <git-ref>) [--out <dir>] [--ai-plan] [--max-chars <n>]",
         Options:
         [
             .. ContextCommand.TargetOptions,
             new(OutOption, "Directory for proposal bundles (default: 'output' in testwizz.json). Must be outside the repository.", "dir"),
             new(AiPlanOption, "Also let the model propose extra scenarios before writing tests (same as plan --ai)."),
+            new(SinceOption, "Find C# methods changed since this Git ref; generate only when exactly one matches.", "ref"),
         ],
         MaxArguments: 1,
         Handler: Run);
@@ -44,6 +46,44 @@ public static class GenerateCommand
         catch (ProposalException ex)
         {
             throw new CliException(ex.Code, ex.Message);
+        }
+
+        if (context.Has(SinceOption))
+        {
+            var since = context.Options[SinceOption];
+            IReadOnlyList<string> targets;
+            try
+            {
+                targets = ChangedCode.Methods(root, since ?? "");
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                throw new CliException("git.diff", ex.Message);
+            }
+
+            if (targets.Count == 0)
+            {
+                throw new CliException("target.not_found", "No changed C# methods found for --since.");
+            }
+
+            if (targets.Count > 1 && !context.Options.ContainsKey("--for"))
+            {
+                throw new CliException("target.ambiguous", "Multiple methods changed; select one with --for: " + string.Join(", ", targets));
+            }
+
+            if (context.Options.TryGetValue("--for", out var requested) && !targets.Contains(requested, StringComparer.Ordinal))
+            {
+                throw new CliException("target.not_changed", $"--for '{requested}' is not among methods changed since '{since}'.");
+            }
+
+            if (!context.Has("--for"))
+            {
+                var selected = new Dictionary<string, string?>(context.Options, StringComparer.Ordinal)
+                {
+                    ["--for"] = targets[0],
+                };
+                context = context with { Options = selected };
+            }
         }
 
         var document = ContextCommand.Load(context, Definition.Usage);
