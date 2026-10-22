@@ -80,7 +80,34 @@ public static class XUnitGenerator
             user.Append(" (e.g. ").Append(Clean(string.Join(", ", conventions.ExampleTestNames))).Append(')');
         }
 
-        user.Append("\n\n## Code under test\n");
+        user.Append("\n\n");
+        AppendCodeUnderTest(user, context);
+
+        user.Append("\n## Test plan\n");
+        foreach (var scenario in plan.Scenarios)
+        {
+            user.Append("- ").Append(scenario.Id).Append(" [").Append(ScenarioCategories.Name(scenario.Category)).Append("] ").Append(Clean(scenario.Title)).Append('\n');
+            user.Append("  Inputs: ").Append(Clean(scenario.Inputs)).Append('\n');
+            user.Append("  Expected: ").Append(Clean(scenario.ExpectedBehavior)).Append('\n');
+            if (scenario.NeedsReview)
+            {
+                user.Append("  Needs review: ").Append(Clean(scenario.ReviewReason ?? "yes")).Append('\n');
+            }
+        }
+
+        if (conventions.StyleExample is { } example)
+        {
+            user.Append("\n## Example test file (").Append(Clean(conventions.StyleExampleFile ?? "")).Append(")\n```csharp\n").Append(Clean(example)).Append("\n```\n");
+        }
+
+        user.Append(PromptData.End).Append('\n');
+        return new JsonChatRequest(SystemPrompt, user.ToString(), "testwizz_xunit_tests", Schema);
+    }
+
+    /// <summary>Namespace, type, constructors, signature, source excerpt and dependencies of the target.</summary>
+    internal static void AppendCodeUnderTest(StringBuilder user, ContextDocument context)
+    {
+        user.Append("## Code under test\n");
         user.Append("Namespace: ").Append(Clean(context.Target.Namespace ?? "(global)")).Append('\n');
         user.Append("Type: ").Append(Clean(context.Target.ContainingType ?? context.Target.Name)).Append('\n');
         foreach (var constructor in context.Constructors)
@@ -109,26 +136,6 @@ public static class XUnitGenerator
                 }
             }
         }
-
-        user.Append("\n## Test plan\n");
-        foreach (var scenario in plan.Scenarios)
-        {
-            user.Append("- ").Append(scenario.Id).Append(" [").Append(ScenarioCategories.Name(scenario.Category)).Append("] ").Append(Clean(scenario.Title)).Append('\n');
-            user.Append("  Inputs: ").Append(Clean(scenario.Inputs)).Append('\n');
-            user.Append("  Expected: ").Append(Clean(scenario.ExpectedBehavior)).Append('\n');
-            if (scenario.NeedsReview)
-            {
-                user.Append("  Needs review: ").Append(Clean(scenario.ReviewReason ?? "yes")).Append('\n');
-            }
-        }
-
-        if (conventions.StyleExample is { } example)
-        {
-            user.Append("\n## Example test file (").Append(Clean(conventions.StyleExampleFile ?? "")).Append(")\n```csharp\n").Append(Clean(example)).Append("\n```\n");
-        }
-
-        user.Append(PromptData.End).Append('\n');
-        return new JsonChatRequest(SystemPrompt, user.ToString(), "testwizz_xunit_tests", Schema);
     }
 
     public static async Task<GenerationResult> GenerateAsync(

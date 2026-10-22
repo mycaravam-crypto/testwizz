@@ -74,6 +74,22 @@ public sealed class FakeModelServer : IAsyncDisposable
             ["eval_count"] = 7,
         }.ToJsonString());
 
+    /// <summary>Like <see cref="AsOllama"/>, but each chat call returns the next content; the last one repeats.</summary>
+    public FakeModelServer AsOllamaSequence(string model, params string[] contents)
+    {
+        var next = 0;
+        AsOllama(model, contents[0]);
+        return On("POST /api/chat", async context =>
+        {
+            var content = contents[Math.Min(Interlocked.Increment(ref next) - 1, contents.Length - 1)];
+            context.Response.ContentType = "application/json";
+            await context.Response.WriteAsync(new JsonObject
+            {
+                ["message"] = new JsonObject { ["role"] = "assistant", ["content"] = content },
+            }.ToJsonString());
+        });
+    }
+
     /// <summary>Standard OpenAI-compatible responses under <c>/v1</c>.</summary>
     public FakeModelServer AsOpenAi(string model, string content) => this
         .OnJson("GET /v1/models", new JsonObject
