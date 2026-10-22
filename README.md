@@ -14,6 +14,7 @@ Status: early development. See [PLAN.md](PLAN.md) for the design and milestones.
 | `testwizz ai check [path]` | Check that the configured model is reachable, private, installed and returns schema-valid JSON. |
 | `testwizz context [path] --for <target>` | Show the `testwizz.context/v1` context for a C# type or method (signature, source excerpt, injected dependencies, thrown exceptions, related tests). |
 | `testwizz plan [path] --for <method> [--ai]` | Plan evidence-linked test scenarios (`testwizz.plan/v1`); `--ai` lets the local model propose more. |
+| `testwizz generate [path] --for <method> [--ai-plan]` | Plan, then let the local model write xUnit tests; prints the validated proposal (nothing is written or run yet). |
 
 Global options: `--format text|json`, `--help`, `--version`.
 
@@ -91,6 +92,22 @@ The planner builds an **evidence catalog** from the method (guards, thrown excep
 - Existing tests that look like they cover a scenario are listed in `possibleDuplicateOf` (name heuristics, not coverage).
 - With `--ai`, the model sees the repository data inside a block declared as untrusted, answers with schema-constrained JSON, and every proposed scenario must cite existing evidence ids. Anything else is dropped and reported under `findings`. AI scenarios are always marked for review. The plan records the model, its digest and the prompt version.
 
+## Generate
+
+```bash
+testwizz generate . --for OrderService.PlaceOrderAsync
+testwizz generate . --for Calculator.Divide --ai-plan --format json
+```
+
+1. **Conventions** are detected from the repository: the test project that references the target's project, its xUnit package, mocking library (NSubstitute, Moq, FakeItEasy), assertion library (FluentAssertions, Shouldly, or plain `Assert`), implicit/global usings, namespace, naming pattern of existing tests, and one existing test file as a style example. Packages are never added; missing ones become findings.
+2. TestWizz picks the **file path, namespace and class name** (never reusing an existing file); the model only returns code and assumptions.
+3. **Validation**, without building or running anything:
+   - C# syntax;
+   - every test carries `[Trait("Scenario", "S<n>")]` for a scenario that exists in the plan, and uncovered scenarios are reported;
+   - calls to members or constructors of repository types that don't exist, have the wrong arguments or aren't accessible are errors. This includes calls inside `Assert.Throws` lambdas and mock setups or verifications: TestWizz type-checks against small stand-ins for the xUnit, NSubstitute and Moq APIs.
+
+Exit code `1` means the proposal has errors. Writing proposal bundles and patches comes next (#8).
+
 ## Development
 
 Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download).
@@ -106,4 +123,4 @@ dotnet tool install --global TestWizz --add-source ./artifacts
 testwizz --version
 ```
 
-Layout: `src/TestWizz.Cli` (commands, output), `src/TestWizz.Core` (configuration and, later, contracts), `src/TestWizz.AI` (model clients, endpoint guard, `ai check`), `src/TestWizz.DotNet` (Roslyn context provider), `fixtures/dotnet` (sample solution used by golden tests; regenerate goldens with `TESTWIZZ_UPDATE_GOLDEN=1 dotnet test`), `tests/TestWizz.UnitTests` (xUnit v3; model servers are faked on loopback, so no real AI or network is needed).
+Layout: `src/TestWizz.Cli` (commands, output), `src/TestWizz.Core` (configuration and, later, contracts), `src/TestWizz.AI` (model clients, endpoint guard, `ai check`), `src/TestWizz.DotNet` (Roslyn context provider, C# scenario extractor, xUnit conventions/generator/validator), `fixtures/dotnet` (sample solution used by golden tests; regenerate goldens with `TESTWIZZ_UPDATE_GOLDEN=1 dotnet test`), `tests/TestWizz.UnitTests` (xUnit v3; model servers are faked on loopback, so no real AI or network is needed).

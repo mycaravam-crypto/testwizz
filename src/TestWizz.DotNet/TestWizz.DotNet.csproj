@@ -5,6 +5,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\TestWizz.AI\TestWizz.AI.csproj" />
     <ProjectReference Include="..\TestWizz.Core\TestWizz.Core.csproj" />
     <InternalsVisibleTo Include="TestWizz.UnitTests" />
   </ItemGroup>

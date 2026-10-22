@@ -79,6 +79,12 @@ public sealed class RoslynContextProvider
 
     public static RoslynContextProvider Load(string root) => new(Path.GetFullPath(root));
 
+    /// <summary>The repository compilation, for checking generated code against the real API.</summary>
+    internal Compilation Compilation => _compilation;
+
+    internal bool IsRepositoryType(ITypeSymbol? type) =>
+        type is not null && type.OriginalDefinition.DeclaringSyntaxReferences.Any(r => _files.Any(f => f.Tree == r.SyntaxTree));
+
     public ContextDocument GetContext(string target, string toolVersion, int maxExcerptChars = DefaultMaxExcerptChars)
     {
         var match = Resolve(target);

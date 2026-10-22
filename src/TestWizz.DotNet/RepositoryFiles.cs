@@ -15,23 +15,26 @@ internal static class RepositoryFiles
     private static readonly HashSet<string> SkippedDirectories = new(StringComparer.OrdinalIgnoreCase) { "bin", "obj", "node_modules" };
 
     /// <summary>Repository-relative paths with forward slashes, ordinal order.</summary>
-    public static IReadOnlyList<string> CSharpFiles(string root)
+    public static IReadOnlyList<string> CSharpFiles(string root) => Files(root, "*.cs");
+
+    /// <inheritdoc cref="CSharpFiles"/>
+    public static IReadOnlyList<string> Files(string root, string pattern)
     {
-        var files = Git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "*.cs") is { } output
+        var files = Git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", pattern) is { } output
             ? output.Split('\0', StringSplitOptions.RemoveEmptyEntries).Where(f => File.Exists(Path.Combine(root, f)))
-            : Walk(root);
+            : Walk(root, pattern);
         return [.. files.Select(f => f.Replace('\\', '/')).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Take(MaxFiles)];
     }
 
     /// <summary>HEAD commit, or null outside a git work tree or when git is unavailable.</summary>
     public static string? Revision(string root) => Git(root, "rev-parse", "HEAD")?.Trim() is { Length: 40 } sha ? sha : null;
 
-    private static IEnumerable<string> Walk(string root)
+    private static IEnumerable<string> Walk(string root, string pattern)
     {
         var pending = new Stack<string>([root]);
         while (pending.TryPop(out var directory))
         {
-            foreach (var file in Directory.EnumerateFiles(directory, "*.cs"))
+            foreach (var file in Directory.EnumerateFiles(directory, pattern))
             {
                 yield return Path.GetRelativePath(root, file);
             }

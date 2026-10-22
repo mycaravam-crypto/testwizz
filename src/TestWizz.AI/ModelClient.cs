@@ -68,6 +68,13 @@ public abstract class ModelClient : IDisposable
 
     public abstract Task<JsonChatResponse> CompleteJsonAsync(JsonChatRequest request, CancellationToken cancellationToken);
 
+    /// <summary>Digest of the configured model for provenance, or null when the server does not report one.</summary>
+    public async Task<string?> ModelDigestAsync(CancellationToken cancellationToken)
+    {
+        var models = await ListModelsAsync(cancellationToken).ConfigureAwait(false);
+        return models?.FirstOrDefault(m => m.Name == Settings.Model || m.Name == Settings.Model + ":latest")?.Digest;
+    }
+
     public void Dispose()
     {
         _http.Dispose();
