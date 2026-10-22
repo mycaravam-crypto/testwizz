@@ -23,6 +23,16 @@ public sealed class ChangedCodeTests
             Git(root, "commit", "-qm", "change");
 
             Assert.Equal(["Demo.B"], ChangedCode.Methods(root, baseline));
+
+            // Listing is pure Git analysis: no testwizz.json, API key, or model is needed.
+            using var stdout = new StringWriter();
+            using var stderr = new StringWriter();
+            var app = new TestWizz.Cli.CliApp(stdout, stderr, root);
+            var exitCode = app.Run(["generate", ".", "--since", baseline, "--list-changed", "--format", "json"],
+                TestContext.Current.CancellationToken);
+            Assert.Equal(TestWizz.Cli.ExitCodes.Success, exitCode);
+            Assert.Contains("Demo.B", stdout.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("testwizz.json", stderr.ToString(), StringComparison.Ordinal);
         }
         finally
         {
