@@ -38,21 +38,6 @@ public static class GenerateCommand
         var root = context.PathArgument();
         if (context.Has(ListChangedOption) && !context.Has(SinceOption))
             throw new CliException("usage", "--list-changed requires --since.");
-        var config = ConfigCommand.Load(Path.Combine(root, TestWizzConfig.FileName));
-        var settings = config.Ai;
-        var output = context.Options.TryGetValue(OutOption, out var outText) && !string.IsNullOrWhiteSpace(outText)
-            ? Path.GetFullPath(outText, context.WorkingDirectory)
-            : Path.GetFullPath(config.Output, root);
-        try
-        {
-            // Checked again when writing; failing here avoids a slow model call that could not be saved.
-            ProposalBundle.EnsureOutsideRepository(root, output);
-        }
-        catch (ProposalException ex)
-        {
-            throw new CliException(ex.Code, ex.Message);
-        }
-
         if (context.Has(SinceOption))
         {
             var since = context.Options[SinceOption];
@@ -102,6 +87,20 @@ public static class GenerateCommand
                 selected["--for"] = targets[0];
                 context = context with { Options = selected };
             }
+        }
+
+        var config = ConfigCommand.Load(Path.Combine(root, TestWizzConfig.FileName));
+        var settings = config.Ai;
+        var output = context.Options.TryGetValue(OutOption, out var outText) && !string.IsNullOrWhiteSpace(outText)
+            ? Path.GetFullPath(outText, context.WorkingDirectory)
+            : Path.GetFullPath(config.Output, root);
+        try
+        {
+            ProposalBundle.EnsureOutsideRepository(root, output);
+        }
+        catch (ProposalException ex)
+        {
+            throw new CliException(ex.Code, ex.Message);
         }
 
         var document = ContextCommand.Load(context, Definition.Usage);
