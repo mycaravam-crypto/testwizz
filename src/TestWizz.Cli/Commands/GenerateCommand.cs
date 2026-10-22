@@ -98,10 +98,8 @@ public static class GenerateCommand
 
             if (!context.Has("--for"))
             {
-                var selected = context.Options.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal)
-                {
-                    ["--for"] = targets[0],
-                };
+                var selected = context.Options.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+                selected["--for"] = targets[0];
                 context = context with { Options = selected };
             }
         }
