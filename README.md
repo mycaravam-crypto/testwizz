@@ -11,6 +11,7 @@ Status: early development. See [PLAN.md](PLAN.md) for the design and milestones.
 | `testwizz help [command]` | Show available commands or help for one command. |
 | `testwizz init [path] [--force]` | Create a default `testwizz.json` in a directory. Refuses to overwrite without `--force`. |
 | `testwizz config [path]` | Validate `testwizz.json` and show the effective configuration. |
+| `testwizz ai check [path]` | Check that the configured model is reachable, private, installed and returns schema-valid JSON. |
 
 Global options: `--format text|json`, `--help`, `--version`.
 
@@ -41,11 +42,28 @@ Exit codes: `0` success, `1` validation failed, `2` usage, configuration or runt
 ```
 
 - `ai.provider`: `ollama` or `openai-compatible` (LM Studio, llama.cpp server, vLLM, ...).
+- `ai.endpoint`: for Ollama the server root (`http://127.0.0.1:11434`); for OpenAI-compatible servers the base URL including the version, e.g. `http://127.0.0.1:1234/v1`.
 - `ai.apiKeyEnv`: the *name* of an environment variable holding the key, never the key itself. `.env` files are not loaded.
 - `run.runtime`: `docker` or `podman`. Generated tests only ever run inside a container.
 - `output`: where proposals are written, relative to the config file. It defaults to a directory outside the repository.
 
 Omitted keys use the defaults above. Unknown keys and invalid values are errors.
+
+## Local model
+
+```bash
+ollama pull qwen2.5-coder:14b
+testwizz init
+testwizz ai check
+```
+
+`ai check` runs four steps: `apiKey` (env var set, if configured), `endpoint` (host resolves only to private addresses), `model` (installed on the server) and `structuredOutput` (a tiny synthetic prompt answered with schema-valid JSON). Exit code `1` means the server or model failed a step; `2` means configuration problems such as a public endpoint or a missing API key variable.
+
+Network rules for every model call:
+
+- Only loopback, RFC 1918 (`10/8`, `172.16/12`, `192.168/16`), `100.64/10` (Tailscale and similar VPNs) and IPv6 unique-local addresses are allowed. Link-local addresses, including cloud metadata, are rejected.
+- The host is resolved on every connection; if *any* address is public the connection is refused, and the socket connects to the address that was checked.
+- System proxies (`HTTP(S)_PROXY`) are ignored, redirects are not followed, and TLS certificates are validated normally. There is no option to skip validation; trust a self-signed certificate in your OS store instead.
 
 ## Development
 
@@ -62,4 +80,4 @@ dotnet tool install --global TestWizz --add-source ./artifacts
 testwizz --version
 ```
 
-Layout: `src/TestWizz.Cli` (commands, output), `src/TestWizz.Core` (configuration and, later, contracts), `tests/TestWizz.UnitTests` (xUnit v3).
+Layout: `src/TestWizz.Cli` (commands, output), `src/TestWizz.Core` (configuration and, later, contracts), `src/TestWizz.AI` (model clients, endpoint guard, `ai check`), `tests/TestWizz.UnitTests` (xUnit v3; model servers are faked on loopback, so no real AI or network is needed).

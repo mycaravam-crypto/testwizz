@@ -4,8 +4,14 @@ using TestWizz.Cli.Commands;
 namespace TestWizz.Cli;
 
 /// <summary>Entry point independent of the console so tests can run commands in-process.</summary>
-public sealed class CliApp(TextWriter stdout, TextWriter stderr, string workingDirectory)
+public sealed class CliApp(
+    TextWriter stdout,
+    TextWriter stderr,
+    string workingDirectory,
+    Func<string, string?>? getEnvironmentVariable = null)
 {
+    private readonly Func<string, string?> _getEnvironmentVariable = getEnvironmentVariable ?? Environment.GetEnvironmentVariable;
+
     public static string Version { get; } =
         typeof(CliApp).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0";
 
@@ -15,12 +21,13 @@ public sealed class CliApp(TextWriter stdout, TextWriter stderr, string workingD
         HelpCommand.Definition,
         InitCommand.Definition,
         ConfigCommand.Definition,
+        AiCommand.Definition,
     ];
 
     public static IReadOnlyDictionary<string, CommandDefinition> CommandsByName { get; } =
         Commands.ToDictionary(c => c.Name, StringComparer.Ordinal);
 
-    public int Run(IReadOnlyList<string> args)
+    public int Run(IReadOnlyList<string> args, CancellationToken cancellationToken = default)
     {
         var output = new CliOutput(stdout, stderr, CommandLineParser.DetectFormat(args));
         string? commandName = null;
@@ -51,7 +58,8 @@ public sealed class CliApp(TextWriter stdout, TextWriter stderr, string workingD
             }
 
             var command = CommandsByName[parsed.CommandName];
-            return command.Handler(new CommandContext(command, parsed.Arguments, parsed.Options, output, workingDirectory));
+            return command.Handler(new CommandContext(
+                command, parsed.Arguments, parsed.Options, output, workingDirectory, _getEnvironmentVariable, cancellationToken));
         }
         catch (CliException ex)
         {

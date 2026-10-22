@@ -18,7 +18,9 @@ public sealed record CommandContext(
     IReadOnlyList<string> Arguments,
     IReadOnlyDictionary<string, string?> Options,
     CliOutput Output,
-    string WorkingDirectory)
+    string WorkingDirectory,
+    Func<string, string?> GetEnvironmentVariable,
+    CancellationToken CancellationToken)
 {
     public bool Has(string option) => Options.ContainsKey(option);
 

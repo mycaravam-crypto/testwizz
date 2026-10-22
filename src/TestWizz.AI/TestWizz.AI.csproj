@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\TestWizz.Core\TestWizz.Core.csproj" />
+    <InternalsVisibleTo Include="TestWizz.UnitTests" />
+  </ItemGroup>
+
+</Project>

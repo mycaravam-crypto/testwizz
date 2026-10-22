@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/TestWizz.AI/TestWizz.AI.csproj" />
     <Project Path="src/TestWizz.Cli/TestWizz.Cli.csproj" />
     <Project Path="src/TestWizz.Core/TestWizz.Core.csproj" />
   </Folder>

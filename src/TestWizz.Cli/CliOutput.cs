@@ -47,7 +47,8 @@ public sealed class CliOutput(TextWriter stdout, TextWriter stderr, OutputFormat
 
     public TextWriter Stderr { get; } = stderr;
 
-    public void Result(string command, JsonObject result, string text)
+    /// <param name="status"><c>ok</c>, or <c>failed</c> when the command ran but a check did not pass (exit code 1).</param>
+    public void Result(string command, JsonObject result, string text, string status = "ok")
     {
         if (Format == OutputFormat.Json)
         {
@@ -55,7 +56,7 @@ public sealed class CliOutput(TextWriter stdout, TextWriter stderr, OutputFormat
             {
                 ["schema"] = Schema,
                 ["command"] = command,
-                ["status"] = "ok",
+                ["status"] = status,
                 ["result"] = result,
             });
         }
