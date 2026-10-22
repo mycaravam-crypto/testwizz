@@ -17,7 +17,7 @@ public static class VueContext
         string full = Path.GetFullPath(relative, root);
         if (!File.Exists(full))
         {
-            var candidates = Directory.EnumerateFiles(root, "*.vue", SearchOption.AllDirectories)
+            var candidates = Directory.EnumerateFiles(root, "*.vue", new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint })
                 .Where(path => !path.Split(Path.DirectorySeparatorChar)
                     .Any(segment => segment is "node_modules" or "dist" or "build" or ".git"))
                 .Select(path => Path.GetRelativePath(root, path).Replace('\\', '/'))
