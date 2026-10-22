@@ -53,7 +53,7 @@ public static class GenerateCommand
         if (context.Has(SinceOption))
         {
             var since = context.Options[SinceOption];
-            IReadOnlyList<string> targets;
+            List<string> targets;
             try
             {
                 targets = ChangedCode.Ranked(root, since ?? "").Where(m => m.Risk >= minRisk).Select(m => m.Target).ToList();
