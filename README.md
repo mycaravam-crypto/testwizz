@@ -15,7 +15,8 @@ Status: early development. See [PLAN.md](PLAN.md) for the design and milestones.
 | `testwizz context [path] --for <target>` | Show the `testwizz.context/v1` context for a C# type or method (signature, source excerpt, injected dependencies, thrown exceptions, related tests). |
 | `testwizz plan [path] --for <method> [--ai]` | Plan evidence-linked test scenarios (`testwizz.plan/v1`); `--ai` lets the local model propose more. |
 | `testwizz generate [path] --for <method> [--out <dir>] [--ai-plan]` | Plan, let the local model write xUnit tests, validate them and save a proposal bundle outside the repository. The repository is not changed. |
-| `testwizz run [path] --proposal <id> [--image <image>] [--timeout <s>]` | Build and run a proposal's tests in a Docker/Podman container with the network off; results go into the bundle. Never runs on the host. |
+| `testwizz run [path] --proposal <id> [--no-repair] [--image <image>] [--timeout <s>]` | Build and run a proposal's tests in a Docker/Podman container with the network off, and let the model repair failing tests (bounded). Results go into the bundle. Never runs on the host. |
+| `testwizz apply [path] --proposal <id> [--allow-unverified]` | Copy a proposal's new test files into the repository after stale and overwrite checks. Nothing is committed. |
 
 Global options: `--format text|json`, `--help`, `--version`.
 
@@ -139,6 +140,34 @@ testwizz run . --proposal ../.testwizz-proposals/shop-calculator-divide-5242ec6f
 5. Only the proposal's test class runs (`dotnet test --filter FullyQualifiedName~<Namespace>.<Class>.`). The image is `mcr.microsoft.com/dotnet/sdk:<version>` from the test project's target framework, or `--image` (for example an SDK image that trusts your corporate proxy's certificate).
 
 Results (`testwizz.run/v1`) are written to `<bundle>/run/`: `result.json`, `restore.log`, `build.log`, `test.log`, `results.trx`. They include the status (`passed`, `failed`, `compile-error`, `timeout`, `restore-failed`), compile errors with file, line, code and whether they are in the proposed file, and each test's outcome, message, stack trace and scenarios. Source files that changed since `generate` and bundle files edited by hand are reported. Exit codes: `0` passed, `1` failed, compile error or timeout, `2` restore failure or setup problem.
+
+### Repair
+
+When the tests don't compile or fail, `run` sends the compile errors or failures, the current test file and the code under test back to the model (prompt `xunit-repair/v1`) and runs again, at most `run.maxRepairAttempts` times (default 2; `--no-repair` turns it off).
+
+- Only the proposed test file changes, inside the bundle. The previous version is kept under `attempts/<n>/`, and the manifest hashes and `changes.patch` are updated.
+- A repair is **rejected** if any test was removed or renamed, changed its scenario links, became skipped, gained an assertion that cannot fail, has fewer assertions, or swapped an exact assertion (`Equal`, `Throws<T>`, `Received`, …) for a looser one (`True`, `ThrowsAny`, `NotNull`, …). It must also pass the same static checks as `generate`. The next attempt is told why.
+- Accepted repairs that change an assertion's expected value are listed under "changed expectations" for review.
+- The model may decline to change a test it believes exposes a bug in the code; it reports that as a suspected bug.
+- No repair is attempted for compile errors in existing repository code.
+- Tests that still fail after the last attempt stay in the proposal, labeled **"possible bug in the code or a wrong test"**.
+
+Every run, repair (accepted or rejected, with reasons, model and prompt version) and apply is recorded in the manifest's `history` and summarized at the end of `findings.md`.
+
+## Apply
+
+```bash
+testwizz apply . --proposal shop-calculator-divide-5242ec6f86c4
+```
+
+`apply` writes the proposal's files into the repository and prints them. It does not commit; review with `git status` and `git diff`. It refuses when:
+
+- the proposal has validation errors;
+- a source file it was generated from has changed (generate again);
+- the last run did not pass, no run was recorded, or a bundle file was edited after the run (unless `--allow-unverified`);
+- a file would be overwritten, or a path is not inside the test project or resolves outside the repository through a symbolic link.
+
+Files are created with create-new semantics; if one fails, the ones already written are removed again. Production files are never modified.
 
 ## Development
 

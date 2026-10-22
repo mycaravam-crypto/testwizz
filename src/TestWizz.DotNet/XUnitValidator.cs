@@ -186,9 +186,38 @@ public static class XUnitValidator
     /// (NSubstitute <c>Received</c>, Moq <c>Verify</c>, FakeItEasy <c>MustHaveHappened</c>) and local helpers named
     /// <c>Assert*</c>/<c>Verify*</c>. Assertions on constants and <c>NotImplementedException</c> are placeholders.
     /// </summary>
-    private static AssertionSummary Assertions(MethodDeclarationSyntax method)
+    private static AssertionSummary Assertions(MethodDeclarationSyntax method) => Analyze(method).Summary;
+
+    /// <summary>xUnit assertions that pin an exact value, exception type or identity; weaker ones only constrain it.</summary>
+    private static readonly HashSet<string> StrongAsserts = new(StringComparer.Ordinal)
     {
-        int meaningful = 0, weak = 0;
+        "Equal", "StrictEqual", "Equivalent", "Same", "Throws", "ThrowsAsync", "Raises", "RaisesAsync", "Collection", "PropertyChanged",
+    };
+
+    /// <summary>Per-test facts the repair rules compare before and after a model repair.</summary>
+    /// <param name="Strong">Assertions that pin an exact value, exception type or interaction.</param>
+    /// <param name="Texts">Normalized source of every assertion, to spot changed expectations.</param>
+    internal sealed record TestShape(string Name, IReadOnlyList<string> Scenarios, bool Skipped, AssertionSummary Assertions, int Strong, IReadOnlyList<string> Texts);
+
+    /// <summary>Test methods of <paramref name="code"/> by name (first declaration wins).</summary>
+    internal static IReadOnlyDictionary<string, TestShape> Shapes(string code)
+    {
+        var root = CSharpSyntaxTree.ParseText(code, ParseOptions).GetRoot();
+        var shapes = new Dictionary<string, TestShape>(StringComparer.Ordinal);
+        foreach (var method in root.DescendantNodes().OfType<MethodDeclarationSyntax>().Where(IsTest))
+        {
+            var analysis = Analyze(method);
+            shapes.TryAdd(method.Identifier.Text, new TestShape(
+                method.Identifier.Text, [.. ScenarioTraits(method).Order(StringComparer.Ordinal)], IsSkipped(method), analysis.Summary, analysis.Strong, analysis.Texts));
+        }
+
+        return shapes;
+    }
+
+    private static (AssertionSummary Summary, int Strong, List<string> Texts) Analyze(MethodDeclarationSyntax method)
+    {
+        int meaningful = 0, weak = 0, strong = 0;
+        var texts = new List<string>();
         var placeholders = new SortedSet<int>();
         foreach (var invocation in method.DescendantNodes().OfType<InvocationExpressionSyntax>())
         {
@@ -213,10 +242,13 @@ public static class XUnitValidator
                 else if (name is "NotNull" || (name is "True" && arguments.Count > 0 && IsNullCheck(arguments[0])))
                 {
                     weak++;
+                    texts.Add(Normalize(invocation));
                 }
                 else
                 {
                     meaningful++;
+                    strong += StrongAsserts.Contains(name) ? 1 : 0;
+                    texts.Add(Normalize(invocation));
                 }
             }
             else if (name.StartsWith("Should", StringComparison.Ordinal) && !IsInsideShouldChain(invocation))
@@ -230,10 +262,13 @@ public static class XUnitValidator
                 else if (chain.EndsWith("NotBeNull()", StringComparison.Ordinal) || name == "ShouldNotBeNull")
                 {
                     weak++;
+                    texts.Add(chain);
                 }
                 else
                 {
                     meaningful++;
+                    strong++;
+                    texts.Add(string.Join(' ', chain.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)));
                 }
             }
             else if (name is "Received" or "DidNotReceive" or "ReceivedWithAnyArgs" or "DidNotReceiveWithAnyArgs"
@@ -242,6 +277,8 @@ public static class XUnitValidator
                      || (receiver is null && (name.StartsWith("Assert", StringComparison.Ordinal) || name.StartsWith("Verify", StringComparison.Ordinal))))
             {
                 meaningful++;
+                strong++;
+                texts.Add(Normalize(invocation.FirstAncestorOrSelf<ExpressionStatementSyntax>()?.Expression ?? invocation));
             }
         }
 
@@ -252,8 +289,10 @@ public static class XUnitValidator
             placeholders.Add(Line(thrown.GetLocation()));
         }
 
-        return new AssertionSummary(meaningful, weak, [.. placeholders]);
+        return (new AssertionSummary(meaningful, weak, [.. placeholders]), strong, texts);
     }
+
+    private static string Normalize(SyntaxNode node) => string.Join(' ', node.ToString().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     private static bool IsPlaceholder(string name, List<ExpressionSyntax> arguments) => name switch
     {

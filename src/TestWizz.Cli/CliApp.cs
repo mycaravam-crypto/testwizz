@@ -29,6 +29,7 @@ public sealed class CliApp(
         PlanCommand.Definition,
         GenerateCommand.Definition,
         RunCommand.Definition,
+        ApplyCommand.Definition,
     ];
 
     public static IReadOnlyDictionary<string, CommandDefinition> CommandsByName { get; } =

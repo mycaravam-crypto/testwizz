@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json.Nodes;
+using TestWizz.AI;
 using TestWizz.Cli;
 using TestWizz.Core.Configuration;
 using TestWizz.Core.Generation;
@@ -20,6 +21,7 @@ internal static class Bundles
         var extractor = new CSharpScenarioExtractor();
         var plan = ScenarioPlanner.Create(context, extractor.Version, extractor.Extract(context));
         var conventions = XUnitConventions.Detect(repo, context);
+        code = code.ReplaceLineEndings("\n").TrimEnd() + "\n";
         var result = XUnitGenerator.Assemble(provider, context, plan, conventions, code, [], new GenerationProvenance("ollama", "m", null, "xunit/v1", "x"));
         return ProposalBundle.Write(repo, proposals, context, plan, result).Directory;
     }
@@ -159,7 +161,7 @@ public sealed class RunCommandTests : IDisposable
             return new ContainerResult(1, "failed", TimeSpan.Zero, false);
         };
 
-        var (exit, json) = Run(bundle);
+        var (exit, json) = Run(bundle, "--no-repair");
 
         Assert.Equal(ExitCodes.ValidationFailed, exit);
         var result = json["result"]!;
@@ -418,6 +420,30 @@ public sealed class DockerRunTests : IDisposable
             """));
 
         Assert.True(result.Status == RunStatus.Passed, string.Join("\n", result.Tests.Select(t => $"{t.Outcome} {t.Message}")));
+    }
+
+    [Fact]
+    public async Task BrokenProposal_IsRepairedAndPassesInARealContainer()
+    {
+        RequireDocker();
+        await using var server = await FakeModelServer.StartAsync();
+        server.AsOllamaSequence("qwen2.5-coder:14b", new JsonObject
+        {
+            ["code"] = CannedTests.Divide,
+            ["changes"] = new JsonArray("Passed the divisor as an int."),
+            ["suspectedBugs"] = new JsonArray(),
+        }.ToJsonString());
+        var bundle = Bundles.Create(_fixture, _proposals, CannedTests.Divide.Replace("Divide(8, 2)", "Divide(8, \"2\")", StringComparison.Ordinal));
+        var loop = new RepairLoop(
+            new DotNetTestRunner(new CliContainerRuntime(ContainerRuntime.Docker)),
+            () => ModelClient.Create(TestSettings.Ollama(server.BaseUri), _ => null),
+            maxAttempts: 2);
+
+        var result = await loop.RunAsync(_fixture, bundle, new RunOptions(_image, TimeSpan.FromSeconds(300), ContainerLimits.Default), TestContext.Current.CancellationToken);
+
+        Assert.Equal(RunStatus.Passed, result.Final.Result.Status);
+        Assert.Equal(1, result.Accepted);
+        Assert.Equal(3, result.Final.Result.Passed);
     }
 
     [Fact]
