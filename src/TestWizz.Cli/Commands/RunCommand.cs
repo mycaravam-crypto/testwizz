@@ -1,5 +1,7 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Json.Nodes;
+using TestWizz.AI;
 using TestWizz.Core.Configuration;
 using TestWizz.Core.Proposals;
 using TestWizz.Core.Running;
@@ -13,18 +15,20 @@ public static class RunCommand
     private const string ImageOption = "--image";
     private const string TimeoutOption = "--timeout";
     private const string OutOption = "--out";
+    private const string NoRepairOption = "--no-repair";
     private const int DefaultTimeoutSeconds = 600;
 
     public static CommandDefinition Definition { get; } = new(
         "run",
-        "Build and run a proposal's tests in a Docker/Podman container (network off for build and test). Never runs on the host and never changes the repository.",
-        "testwizz run [path] --proposal <id|dir> [--image <image>] [--timeout <seconds>] [--out <dir>]",
+        "Build and run a proposal's tests in a Docker/Podman container (network off for build and test); if they fail, let the model repair the test file up to run.maxRepairAttempts times. Never runs on the host and never changes the repository.",
+        "testwizz run [path] --proposal <id|dir> [--no-repair] [--image <image>] [--timeout <seconds>] [--out <dir>]",
         Options:
         [
             new(ProposalOption, "Proposal id (a folder in the output directory) or the bundle directory itself.", "id"),
             new(ImageOption, "Container image (default: mcr.microsoft.com/dotnet/sdk:<version> from the target framework).", "image"),
             new(TimeoutOption, $"Time limit for all phases together, 30-7200 seconds (default {DefaultTimeoutSeconds}).", "seconds"),
             new(OutOption, "Directory that holds proposal bundles (default: 'output' in testwizz.json).", "dir"),
+            new(NoRepairOption, "Run once; do not ask the model to repair failing tests."),
         ],
         MaxArguments: 1,
         Handler: Run);
@@ -49,9 +53,8 @@ public static class RunCommand
             ? Path.GetFullPath(outText, context.WorkingDirectory)
             : Path.GetFullPath(config.Output, root);
 
-        RunOutput run;
+        RepairLoopResult loop;
         LoadedProposal proposal;
-        string runDirectory;
         try
         {
             proposal = ProposalReader.Load(ProposalReader.Resolve(reference, output, context.WorkingDirectory));
@@ -69,23 +72,37 @@ public static class RunCommand
             }
 
             var image = context.Options.TryGetValue(ImageOption, out var imageText) && !string.IsNullOrWhiteSpace(imageText) ? imageText : null;
-            run = new DotNetTestRunner(runtime)
-                .RunAsync(root, proposal, new RunOptions(image, TimeSpan.FromSeconds(timeoutSeconds), ContainerLimits.Default), context.CancellationToken)
+            var repair = !context.Has(NoRepairOption) && config.Run.MaxRepairAttempts > 0;
+            Func<ModelClient>? clientFactory = repair ? () => ModelClient.Create(config.Ai, context.GetEnvironmentVariable) : null;
+            loop = new RepairLoop(new DotNetTestRunner(runtime), clientFactory, config.Run.MaxRepairAttempts)
+                .RunAsync(root, proposal.Directory, new RunOptions(image, TimeSpan.FromSeconds(timeoutSeconds), ContainerLimits.Default), context.CancellationToken)
                 .GetAwaiter().GetResult();
-            runDirectory = ProposalBundle.WriteRun(proposal.Directory, RunJson.ToJson(run.Result), run.Logs);
+            proposal = ProposalReader.Load(proposal.Directory);
         }
         catch (ProposalException ex)
         {
             throw new CliException(ex.Code, ex.Message);
+        }
+        catch (ModelClientException ex)
+        {
+            throw new CliException($"ai.{ex.Code}", $"{ex.Message} Run 'testwizz ai check' for details, or pass {NoRepairOption}.");
         }
         catch (OperationCanceledException)
         {
             throw new CliException("cancelled", "The run was cancelled; its containers were removed.");
         }
 
-        var result = run.Result;
+        var result = loop.Final.Result;
+        var runDirectory = loop.RunDirectory;
         var json = RunJson.ToJson(result);
-        json["edited"] = new System.Text.Json.Nodes.JsonArray([.. proposal.Edited.Select(e => (System.Text.Json.Nodes.JsonNode)e)]);
+        json["edited"] = new JsonArray([.. proposal.Edited.Select(e => (JsonNode)e)]);
+        json["repair"] = new JsonObject
+        {
+            ["attempts"] = loop.Attempts,
+            ["accepted"] = loop.Accepted,
+            ["maxAttempts"] = context.Has(NoRepairOption) ? 0 : config.Run.MaxRepairAttempts,
+        };
+        json["stillFailing"] = new JsonArray([.. loop.StillFailing.Select(t => (JsonNode)t)]);
         json["path"] = runDirectory;
         var exit = result.Status switch
         {
@@ -93,11 +110,11 @@ public static class RunCommand
             RunStatus.RestoreFailed => ExitCodes.Error,
             _ => ExitCodes.ValidationFailed,
         };
-        context.Output.Result("run", json, ToText(result, proposal, runDirectory), exit == ExitCodes.Success ? "ok" : "failed");
+        context.Output.Result("run", json, ToText(result, proposal, runDirectory, loop), exit == ExitCodes.Success ? "ok" : "failed");
         return exit;
     }
 
-    private static string ToText(RunResult r, LoadedProposal proposal, string runDirectory)
+    private static string ToText(RunResult r, LoadedProposal proposal, string runDirectory, RepairLoopResult loop)
     {
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture, $"Run of {r.ProposalId} in {r.Runtime} ({r.Image})\n");
@@ -136,6 +153,16 @@ public static class RunCommand
                     text.Append(CultureInfo.InvariantCulture, $"           {message.Split('\n')[0].Trim()}\n");
                 }
             }
+        }
+
+        if (loop.Attempts > 0)
+        {
+            text.Append(CultureInfo.InvariantCulture, $"\nRepairs: {loop.Attempts} attempted, {loop.Accepted} accepted (details in findings.md).\n");
+        }
+
+        if (loop.StillFailing.Count > 0)
+        {
+            text.Append(CultureInfo.InvariantCulture, $"Still failing ({RepairLoop.StillFailingLabel}): {string.Join(", ", loop.StillFailing)}\n");
         }
 
         text.Append(CultureInfo.InvariantCulture, $"\nResult: {RunJson.StatusName(r.Status).ToUpperInvariant()} · {r.Passed} passed, {r.Failed} failed. The repository was not changed.\n");

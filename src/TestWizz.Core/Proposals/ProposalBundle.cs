@@ -99,10 +99,9 @@ public static class ProposalBundle
 
     public const string RunFolder = "run";
 
-    /// <summary>
-    /// Replaces the bundle's <c>run/</c> folder with this run's <c>result.json</c> and logs. The manifest is never
-    /// modified, so the proposal id keeps matching its content.
-    /// </summary>
+    public const string HistoryHeading = "## History";
+
+    /// <summary>Replaces the bundle's <c>run/</c> folder with this run's <c>result.json</c> and logs.</summary>
     public static string WriteRun(string bundleDirectory, JsonObject result, IReadOnlyDictionary<string, string> logs)
     {
         var final = Path.Combine(bundleDirectory, RunFolder);
@@ -135,6 +134,92 @@ public static class ProposalBundle
         }
 
         return final;
+    }
+
+    /// <summary>
+    /// Replaces the proposed files after an accepted repair. The previous content is kept under
+    /// <c>attempts/&lt;attempt&gt;/</c>; the manifest's file hashes, tests, findings and validity are updated and
+    /// <c>changes.patch</c> is regenerated. The id stays the one assigned at generation.
+    /// </summary>
+    public static void UpdateFiles(
+        string bundleDirectory,
+        int attempt,
+        IReadOnlyList<GeneratedFile> files,
+        IReadOnlyList<GeneratedTest> tests,
+        IReadOnlyList<GenerationFinding> findings)
+    {
+        var manifest = ReadManifest(bundleDirectory);
+        var byPath = files.ToDictionary(f => f.Path, StringComparer.Ordinal);
+        foreach (var entry in (manifest["files"] as JsonArray ?? []).OfType<JsonObject>())
+        {
+            var path = (string)entry["path"]!;
+            if (!byPath.TryGetValue(path, out var file) || !PathGuard.IsSafeRelative(path))
+            {
+                throw new ProposalException("proposal.invalid", $"A repair may only change the proposed files; {path} is missing.");
+            }
+
+            var current = Path.Combine(bundleDirectory, FilesFolder, path.Replace('/', Path.DirectorySeparatorChar));
+            var kept = Path.Combine(bundleDirectory, "attempts", attempt.ToString(CultureInfo.InvariantCulture), path.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(kept)!);
+            File.Copy(current, kept, overwrite: true);
+            File.WriteAllText(current, file.Content);
+            entry["sha256"] = Sha256(file.Content);
+        }
+
+        if (byPath.Keys.Except((manifest["files"] as JsonArray ?? []).OfType<JsonObject>().Select(e => (string)e["path"]!), StringComparer.Ordinal).FirstOrDefault() is { } extra)
+        {
+            throw new ProposalException("proposal.invalid", $"A repair may only change the proposed files, not add {extra}.");
+        }
+
+        manifest["tests"] = new JsonArray([.. tests.Select(t => (JsonNode)GenerationJson.ToJson(t))]);
+        manifest["findings"] = new JsonArray([.. findings.Select(f => (JsonNode)GenerationJson.ToJson(f))]);
+        manifest["valid"] = findings.All(f => f.Severity != "error");
+        foreach (var scenario in (manifest["scenarios"] as JsonArray ?? []).OfType<JsonObject>())
+        {
+            var id = (string?)scenario["id"];
+            scenario["coveredBy"] = new JsonArray([.. tests.Where(t => t.Scenarios.Contains(id ?? "")).Select(t => (JsonNode)t.Name)]);
+        }
+
+        File.WriteAllText(Path.Combine(bundleDirectory, "changes.patch"), Patch(files));
+        WriteManifest(bundleDirectory, manifest);
+    }
+
+    /// <summary>Appends a run, repair or apply record to the manifest's <c>history</c> and to <c>findings.md</c>.</summary>
+    public static void AppendHistory(string bundleDirectory, JsonObject entry)
+    {
+        var manifest = ReadManifest(bundleDirectory);
+        if (manifest["history"] is not JsonArray history)
+        {
+            history = [];
+            manifest["history"] = history;
+        }
+
+        history.Add(entry);
+        WriteManifest(bundleDirectory, manifest);
+
+        var findingsPath = Path.Combine(bundleDirectory, "findings.md");
+        var findings = File.Exists(findingsPath) ? File.ReadAllText(findingsPath) : "";
+        var cut = findings.IndexOf("\n" + HistoryHeading + "\n", StringComparison.Ordinal);
+        var md = new StringBuilder(cut < 0 ? findings : findings[..(cut + 1)]);
+        md.Append('\n').Append(HistoryHeading).Append("\n\n");
+        foreach (var item in history.OfType<JsonObject>())
+        {
+            md.Append("- ").Append((string?)item["at"]).Append(" **").Append((string?)item["kind"]).Append("** ").Append(Cell((string?)item["summary"] ?? "")).Append('\n');
+        }
+
+        File.WriteAllText(findingsPath, md.ToString());
+    }
+
+    public static JsonObject ReadManifest(string bundleDirectory) =>
+        JsonNode.Parse(File.ReadAllText(Path.Combine(bundleDirectory, ManifestFile))) as JsonObject
+        ?? throw new ProposalException("proposal.invalid", "manifest.json is not a JSON object.");
+
+    private static void WriteManifest(string bundleDirectory, JsonObject manifest)
+    {
+        var path = Path.Combine(bundleDirectory, ManifestFile);
+        var temp = path + $".tmp-{Guid.NewGuid():N}";
+        File.WriteAllText(temp, manifest.ToJsonString(JsonOptions) + "\n");
+        File.Move(temp, path, overwrite: true);
     }
 
     public static string PlanHash(PlanDocument plan) => Sha256(PlanJson.ToJson(plan).ToJsonString());
