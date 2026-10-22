@@ -13,6 +13,7 @@
     <ProjectReference Include="..\TestWizz.Core\TestWizz.Core.csproj" />
     <ProjectReference Include="..\TestWizz.DotNet\TestWizz.DotNet.csproj" />
     <InternalsVisibleTo Include="TestWizz.UnitTests" />
+    <EmbeddedResource Include="../../scripts/vue-context.mjs" LogicalName="vue-context.mjs" />
   </ItemGroup>
 
 </Project>
