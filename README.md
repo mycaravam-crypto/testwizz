@@ -197,3 +197,11 @@ testwizz --version
 ```
 
 Layout: `src/TestWizz.Cli` (commands, output), `src/TestWizz.Core` (configuration, contracts, proposal bundle and stack-neutral checks), `src/TestWizz.AI` (model clients, endpoint guard, `ai check`), `src/TestWizz.DotNet` (Roslyn context provider, C# scenario extractor, xUnit conventions/generator/validator), `fixtures/dotnet` (sample solution used by golden tests; regenerate goldens with `TESTWIZZ_UPDATE_GOLDEN=1 dotnet test`), `tests/TestWizz.UnitTests` (xUnit v3; model servers are faked on loopback, so no real AI or network is needed). Tests that start real containers run only with `TESTWIZZ_DOCKER_TESTS=1` (set in CI); `TESTWIZZ_DOCKER_IMAGE` overrides the SDK image they use.
+
+## Vue SFC context (initial slice)
+
+```sh
+testwizz context . --for src/components/CartItem.vue --format json
+```
+
+Uses Node.js, `@vue/compiler-sfc` and `typescript` **from the target project's node_modules**; install its dependencies first. The bundled read-only Node helper parses the component and reports script bindings into `testwizz.context/v1`. The first slice does not yet extract full props/emits or composables/stores; those fields are marked unavailable. No model calls or repository modifications.
