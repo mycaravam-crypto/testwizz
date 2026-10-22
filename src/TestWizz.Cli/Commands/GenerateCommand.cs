@@ -169,7 +169,7 @@ public static class GenerateCommand
         return result.IsValid ? ExitCodes.Success : ExitCodes.ValidationFailed;
     }
 
-    private static int RunBatch(CommandContext context, IReadOnlyList<string> targets, string since, int minRisk)
+    private static int RunBatch(CommandContext context, List<string> targets, string since, int minRisk)
     {
         if (targets.Count > MaxBatchTargets)
             throw new CliException("target.too_many", $"Changed methods: {targets.Count}; maximum is {MaxBatchTargets}. Narrow the Git comparison.");
