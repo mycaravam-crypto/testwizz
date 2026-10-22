@@ -18,6 +18,7 @@ public static class GenerateCommand
     private const string SinceOption = "--since";
     private const string ListChangedOption = "--list-changed";
     private const string AllChangedOption = "--all-changed";
+    private const string MinRiskOption = "--min-risk";
     private const int MaxBatchTargets = 20;
 
     public static CommandDefinition Definition { get; } = new(
@@ -32,6 +33,7 @@ public static class GenerateCommand
             new(SinceOption, "Find C# methods changed since this Git ref; generate only when exactly one matches.", "ref"),
             new(ListChangedOption, "List changed C# methods without AI calls; suitable for CI."),
             new(AllChangedOption, "Generate proposals for up to 20 changed C# methods and produce one CI summary."),
+            new(MinRiskOption, "Minimum deterministic method-risk score (0-100).", "score"),
         ],
         MaxArguments: 1,
         Handler: Run);
@@ -43,13 +45,18 @@ public static class GenerateCommand
             throw new CliException("usage", "--list-changed and --all-changed require --since.");
         if (context.Has(AllChangedOption) && (context.Has(ListChangedOption) || context.Has("--for")))
             throw new CliException("usage", "--all-changed cannot be combined with --list-changed or --for.");
+        if (context.Has(MinRiskOption) && !context.Has(SinceOption))
+            throw new CliException("usage", "--min-risk requires --since.");
+        var minRisk = 0;
+        if (context.Has(MinRiskOption) && (!int.TryParse(context.Options[MinRiskOption], NumberStyles.None, CultureInfo.InvariantCulture, out minRisk) || minRisk is < 0 or > 100))
+            throw new CliException("usage", "--min-risk must be between 0 and 100.");
         if (context.Has(SinceOption))
         {
             var since = context.Options[SinceOption];
             IReadOnlyList<string> targets;
             try
             {
-                targets = ChangedCode.Methods(root, since ?? "");
+                targets = ChangedCode.Ranked(root, since ?? "").Where(m => m.Risk >= minRisk).Select(m => m.Target).ToList();
             }
             catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
             {
