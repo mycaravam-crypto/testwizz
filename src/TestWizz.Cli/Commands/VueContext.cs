@@ -58,6 +58,13 @@ public static class VueContext
             var members = data.GetProperty("bindings").EnumerateArray()
                 .Select(x => new MemberInfo(x.GetProperty("name").GetString() ?? "",
                     x.GetProperty("kind").GetString() ?? "unknown", relative, 1)).ToArray();
+            foreach (string kind in new[] { "props", "emits", "slots" })
+                foreach (JsonElement item in data.GetProperty(kind).EnumerateArray())
+                {
+                    string nameValue = item.GetString() ?? "";
+                    if (nameValue.Length > 0)
+                        members = [.. members, new MemberInfo(kind + ":" + nameValue, kind + " " + nameValue, relative, 1)];
+                }
             string source = Encoding.UTF8.GetString(bytes);
             bool truncated = source.Length > maxChars;
             return new ContextDocument("vue", new Provenance("vue-compiler-sfc", "project", CliApp.Version),
@@ -65,8 +72,8 @@ public static class VueContext
                 new SourceInfo(relative, 1, source.Split('\n').Length, Convert.ToHexStringLower(SHA256.HashData(bytes)),
                     truncated ? source[..maxChars] : source, truncated, null), null,
                 members, [], [], [], [],
-                [new("props", "Detailed props and validators not yet extracted."),
-                 new("emits", "Emit paths not yet extracted."),
+                [new("propDetails", "Prop types, defaults and validators not yet extracted."),
+                 new("emitPaths", "Emit call sites and payload types not yet extracted."),
                  new("relatedTests", "Vue test relationship mapping not yet available."),
                  new("coverage", "No coverage measurement available.")], []);
         }

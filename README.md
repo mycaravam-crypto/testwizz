@@ -205,3 +205,7 @@ testwizz context . --for src/components/CartItem.vue --format json
 ```
 
 Uses Node.js, `@vue/compiler-sfc` and `typescript` **from the target project's node_modules**; install its dependencies first. The bundled read-only Node helper parses the component and reports script bindings into `testwizz.context/v1`. The first slice does not yet extract full props/emits or composables/stores; those fields are marked unavailable. No model calls or repository modifications.
+
+### Vue surface extraction
+
+The Vue context helper now reports static prop names (`defineProps`), event names (`defineEmits`) and template `<slot>` outlet names as `members` with `props:`, `emits:` and `slots:` identifiers. These are syntax-derived names; prop defaults, validators, payload types and dynamic slots remain explicitly unavailable.
