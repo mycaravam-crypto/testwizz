@@ -39,7 +39,7 @@ public sealed class VueScenarioExtractorTests
     public void NoEmitCallSitesProduceFindingInsteadOfInventedScenarios()
     {
         string root = FindVueFixtureRoot();
-        ContextDocument context = VueContext.Load(root, "src/composables/useCart.ts", 20_000);
+        ContextDocument context = VueContext.Load(root, "src/components/StaticOnly.vue", 20_000);
 
         var extraction = new VueScenarioExtractor().Extract(context);
 
