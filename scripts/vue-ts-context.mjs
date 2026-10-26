@@ -42,6 +42,11 @@ const unwrap = node => node && (ts.isAsExpression(node) || ts.isSatisfiesExpress
   ts.isParenthesizedExpression(node)) ? unwrap(node.expression) : node;
 const objectProperties = node => {
   node = unwrap(node);
+  if (node && (ts.isArrowFunction(node) || ts.isFunctionExpression(node))) {
+    if (ts.isBlock(node.body)) node = node.body.statements.filter(ts.isReturnStatement).at(-1)?.expression;
+    else node = node.body;
+    node = unwrap(node);
+  }
   return node && ts.isObjectLiteralExpression(node) ? node.properties : [];
 };
 const collectSetupStore = (callback, storeName) => {
