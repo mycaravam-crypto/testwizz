@@ -46,27 +46,104 @@ const ast = ts.createSourceFile(filename + '.ts', scriptText, ts.ScriptTarget.La
 const props = new Set();
 const emits = new Set();
 const slots = new Set();
-const collectNames = node => {
-  if (ts.isTypeLiteralNode(node)) {
-    for (const member of node.members) if (member.name) {
-      const name = member.name.getText(ast).replace(/^['"]|['"]$/g, '');
-      if (name) props.add(name);
-    }
+const propDetails = new Map();
+const propDefaults = new Map();
+const emitDetails = new Map();
+const exposed = new Set();
+const computed = new Set();
+const watched = new Set();
+const imports = new Set();
+const mockCandidates = new Set();
+const cleanName = name => name?.getText(ast).replace(/^['"]|['"]$/g, '') ?? '';
+const collectPropMembers = members => {
+  for (const member of members) {
+    if (!member.name) continue;
+    const name = cleanName(member.name);
+    if (!name) continue;
+    props.add(name);
+    const type = member.type?.getText(ast) ?? 'unknown';
+    const optional = !!member.questionToken;
+    propDetails.set(name, { name, type, required: !optional, defaultValue: null, validator: null });
   }
 };
+const collectNames = node => {
+  if (ts.isTypeLiteralNode(node) || ts.isInterfaceDeclaration(node)) {
+    collectPropMembers(node.members);
+    return;
+  }
+  if (!ts.isTypeReferenceNode(node) || !ts.isIdentifier(node.typeName)) return;
+  const declaration = ast.statements.find(statement =>
+    (ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement)) &&
+    statement.name.text === node.typeName.text);
+  if (declaration && ts.isInterfaceDeclaration(declaration)) collectPropMembers(declaration.members);
+  if (declaration && ts.isTypeAliasDeclaration(declaration)) collectNames(declaration.type);
+};
 const collectEmitType = node => {
-  if (ts.isTypeLiteralNode(node)) {
-    for (const member of node.members) if (member.name) emits.add(member.name.getText(ast).replace(/^['"]|['"]$/g, ''));
+  if (!ts.isTypeLiteralNode(node)) return;
+  for (const member of node.members) {
+    if (ts.isCallSignatureDeclaration(member)) {
+      const [eventParameter, ...payloadParameters] = member.parameters;
+      const eventType = eventParameter?.type;
+      const name = eventType && ts.isLiteralTypeNode(eventType) && ts.isStringLiteral(eventType.literal)
+        ? eventType.literal.text
+        : '';
+      if (!name) continue;
+      emits.add(name);
+      const payload = payloadParameters.map(parameter =>
+        `${parameter.name.getText(ast)}: ${parameter.type?.getText(ast) ?? 'unknown'}`).join(', ');
+      emitDetails.set(name, { name, payload });
+      continue;
+    }
+    if (!member.name) continue;
+    const name = cleanName(member.name);
+    if (!name) continue;
+    emits.add(name);
+    const parameters = ts.isMethodSignature(member)
+      ? member.parameters.map(parameter => `${parameter.name.getText(ast)}: ${parameter.type?.getText(ast) ?? 'unknown'}`)
+      : [];
+    const payload = parameters.length > 0 ? parameters.join(', ') : member.type?.getText(ast) ?? '';
+    emitDetails.set(name, { name, payload });
   }
 };
 const visit = node => {
   if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
     const call = node.expression.text;
+    if (call === 'withDefaults') {
+      const defaults = node.arguments[1];
+      if (defaults && ts.isObjectLiteralExpression(defaults)) {
+        for (const entry of defaults.properties) {
+          if (!entry.name) continue;
+          const name = cleanName(entry.name);
+          propDefaults.set(name, entry.initializer?.getText(ast) ?? null);
+        }
+      }
+    }
     if (call === 'defineProps') {
       node.typeArguments?.forEach(collectNames);
       const obj = node.arguments[0];
       if (obj && ts.isObjectLiteralExpression(obj)) for (const entry of obj.properties) {
-        if (entry.name) props.add(entry.name.getText(ast).replace(/^['"]|['"]$/g, ''));
+        if (!entry.name) continue;
+        const name = cleanName(entry.name);
+        if (!name) continue;
+        props.add(name);
+        const options = entry.initializer;
+        let type = 'unknown';
+        let required = false;
+        let defaultValue = null;
+        let validator = null;
+        if (options && ts.isObjectLiteralExpression(options)) {
+          for (const option of options.properties) {
+            if (!option.name) continue;
+            const key = cleanName(option.name);
+            if (key === 'type') type = option.initializer?.getText(ast) ?? 'unknown';
+            if (key === 'required' && option.initializer?.kind === ts.SyntaxKind.TrueKeyword) required = true;
+            if (key === 'default') defaultValue = option.initializer?.getText(ast) ?? null;
+            if (key === 'validator') validator = option.initializer?.getText(ast) ?? null;
+          }
+        } else if (options) {
+          type = options.getText(ast);
+        }
+        propDetails.set(name, { name, type, required, defaultValue, validator });
       }
     }
     if (call === 'defineEmits') {
@@ -75,11 +152,50 @@ const visit = node => {
       if (obj && ts.isArrayLiteralExpression(obj)) for (const element of obj.elements) {
         if (ts.isStringLiteral(element)) emits.add(element.text);
       }
+      if (obj && ts.isObjectLiteralExpression(obj)) for (const entry of obj.properties) {
+        if (!entry.name) continue;
+        const name = cleanName(entry.name);
+        if (!name) continue;
+        emits.add(name);
+        emitDetails.set(name, { name, payload: entry.initializer?.getText(ast) ?? '' });
+      }
+    }
+    if (call === 'defineExpose') {
+      const obj = node.arguments[0];
+      if (obj && ts.isObjectLiteralExpression(obj)) {
+        for (const entry of obj.properties) if (entry.name) exposed.add(cleanName(entry.name));
+      }
+    }
+    if (call === 'inject') mockCandidates.add('inject');
+    if (call === 'useRouter' || call === 'useRoute' || call === 'useI18n' ||
+        (call.startsWith('use') && call.endsWith('Store'))) mockCandidates.add(call);
+    if (call === 'fetch' || call === 'axios' || call === 'useFetch') mockCandidates.add(call);
+    if (ts.isPropertyAccessExpression(node.expression) &&
+        ts.isIdentifier(node.expression.expression) && node.expression.expression.text === 'axios') {
+      mockCandidates.add('axios');
+    }
+    if (call === 'computed' || call === 'watch' || call === 'watchEffect') {
+      const declaration = node.parent;
+      if (ts.isVariableDeclaration(declaration) && ts.isIdentifier(declaration.name)) {
+        (call === 'computed' ? computed : watched).add(declaration.name.text);
+      } else if (call === 'watch' || call === 'watchEffect') {
+        watched.add(node.arguments[0]?.getText(ast) ?? call);
+      }
     }
   }
   ts.forEachChild(node, visit);
 };
+for (const statement of ast.statements) {
+  if (ts.isImportDeclaration(statement)) {
+    const moduleName = statement.moduleSpecifier;
+    if (ts.isStringLiteral(moduleName)) imports.add(moduleName.text);
+  }
+}
 visit(ast);
+for (const [name, defaultValue] of propDefaults) {
+  const existing = propDetails.get(name);
+  if (existing) propDetails.set(name, { ...existing, defaultValue });
+}
 if (descriptor.template) {
   // Vue's template AST exposes slot outlet names and named-slot declarations.
   const walk = node => {
@@ -88,12 +204,26 @@ if (descriptor.template) {
       const name = node.props?.find(p => p.type === 6 && p.name === 'name');
       slots.add(name?.value?.content || 'default');
     }
+    if (node.type === 1) {
+      for (const prop of node.props ?? []) {
+        if (prop.type === 7 && prop.name === 'slot' && prop.arg?.type === 4 && prop.arg.content) {
+          slots.add(prop.arg.content);
+        }
+      }
+    }
     if (Array.isArray(node.children)) node.children.forEach(walk);
     if (Array.isArray(node.branches)) node.branches.forEach(walk);
   };
   walk(descriptor.template.ast);
 }
 console.log(JSON.stringify({
+  propDetails: [...propDetails.values()].sort((a, b) => a.name.localeCompare(b.name)),
+  emitDetails: [...emitDetails.values()].sort((a, b) => a.name.localeCompare(b.name)),
+  exposed: [...exposed].sort(),
+  computed: [...computed].sort(),
+  watched: [...watched].sort(),
+  imports: [...imports].sort(),
+  mockCandidates: [...mockCandidates].sort(),
   name: path.basename(filename, '.vue'),
   bindings: Object.keys(bindings).sort().map(name => ({ name, kind: bindings[name] })),
   template: !!descriptor.template,

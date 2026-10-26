@@ -65,6 +65,31 @@ public static class VueContext
                     if (nameValue.Length > 0)
                         members = [.. members, new MemberInfo(kind + ":" + nameValue, kind + " " + nameValue, relative, 1)];
                 }
+            if (data.TryGetProperty("propDetails", out JsonElement propDetails) && propDetails.ValueKind == JsonValueKind.Array)
+                foreach (JsonElement item in propDetails.EnumerateArray())
+                {
+                    string propName = item.GetProperty("name").GetString() ?? "";
+                    string type = item.GetProperty("type").GetString() ?? "unknown";
+                    bool required = item.GetProperty("required").GetBoolean();
+                    string defaultValue = item.GetProperty("defaultValue").ValueKind == JsonValueKind.Null ? "none" : item.GetProperty("defaultValue").GetString() ?? "unknown";
+                    string validator = item.GetProperty("validator").ValueKind == JsonValueKind.Null ? "none" : item.GetProperty("validator").GetString() ?? "unknown";
+                    members = [.. members, new MemberInfo("prop-detail:" + propName, $"prop {propName}: {type} (required: {required.ToString().ToLowerInvariant()}, default: {defaultValue}, validator: {validator})", relative, 1)];
+                }
+            if (data.TryGetProperty("emitDetails", out JsonElement emitDetails) && emitDetails.ValueKind == JsonValueKind.Array)
+                foreach (JsonElement item in emitDetails.EnumerateArray())
+                {
+                    string emitName = item.GetProperty("name").GetString() ?? "";
+                    string payload = item.GetProperty("payload").GetString() ?? "";
+                    members = [.. members, new MemberInfo("emit-detail:" + emitName, $"emit {emitName}({payload})", relative, 1)];
+                }
+            foreach (string kind in new[] { "exposed", "computed", "watched", "imports", "mockCandidates" })
+                if (data.TryGetProperty(kind, out JsonElement values) && values.ValueKind == JsonValueKind.Array)
+                    foreach (JsonElement item in values.EnumerateArray())
+                    {
+                        string value = item.GetString() ?? "";
+                        if (value.Length > 0)
+                            members = [.. members, new MemberInfo(kind + ":" + value, kind + " " + value, relative, 1)];
+                    }
             string source = Encoding.UTF8.GetString(bytes);
             bool truncated = source.Length > maxChars;
             return new ContextDocument("vue", new Provenance("vue-compiler-sfc", "project", CliApp.Version),
