@@ -172,7 +172,9 @@ for (const statement of ast.statements) {
 }
 visit(ast);
 const targetName = path.basename(filename, path.extname(filename));
-const storeSeen = members.some(m => m.id.startsWith('store:'));
+const storeMember = members.find(m => m.id.startsWith('store:'));
+const storeSeen = !!storeMember;
+const displayName = storeMember ? storeMember.id.slice('store:'.length) : targetName;
 if (!storeSeen && !targetName.startsWith('use') && !/(store|pinia)/i.test(targetName)) {
   console.error('TypeScript target is not recognized as a composable or Pinia store.');
   process.exit(2);
@@ -216,7 +218,7 @@ for (const testFile of testFiles) {
 }
 relatedTests.sort((a, b) => a.file.localeCompare(b.file));
 console.log(JSON.stringify({
-  name: targetName,
+  name: displayName,
   kind: storeSeen ? 'pinia-store' : 'composable',
   imports: [...new Set(imports)].sort(),
   dependencies: [...dependencies].sort(),
