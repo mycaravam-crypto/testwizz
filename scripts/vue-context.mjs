@@ -245,13 +245,33 @@ if (viteConfig) {
   const configAst = ts.createSourceFile(viteConfig, configSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const readString = node => node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
     ? node.text : null;
+  const readReplacement = node => {
+    const direct = readString(node);
+    if (direct !== null) return direct;
+    if (!node || !ts.isCallExpression(node)) return null;
+    const expression = node.expression.getText(configAst);
+    if (expression.endsWith('.resolve') || expression === 'resolve') {
+      const args = [...node.arguments];
+      const first = args[0]?.getText(configAst);
+      if (first === '__dirname' || first === 'import.meta.dirname') {
+        const segments = args.slice(1).map(readString);
+        if (segments.every(segment => segment !== null)) return path.resolve(resolvedRoot, ...segments);
+      }
+    }
+    if (expression.endsWith('fileURLToPath') && node.arguments[0] && ts.isNewExpression(node.arguments[0])) {
+      const urlCall = node.arguments[0];
+      const urlSpecifier = readString(urlCall.arguments?.[0]);
+      if (urlSpecifier?.startsWith('.')) return path.resolve(resolvedRoot, urlSpecifier);
+    }
+    return null;
+  };
   const visitAliases = node => {
     if (ts.isPropertyAssignment(node) && node.name.getText(configAst).replace(/^['"]|['"]$/g, '') === 'alias') {
       if (ts.isObjectLiteralExpression(node.initializer)) {
         for (const entry of node.initializer.properties) {
           if (!ts.isPropertyAssignment(entry)) continue;
           const key = readString(entry.name) ?? entry.name.getText(configAst).replace(/^['"]|['"]$/g, '');
-          const value = readString(entry.initializer);
+          const value = readReplacement(entry.initializer);
           if (value !== null) addAlias(key, value, resolvedRoot);
         }
       } else if (ts.isArrayLiteralExpression(node.initializer)) {
@@ -261,7 +281,7 @@ if (viteConfig) {
             p.name.getText(configAst).replace(/^['"]|['"]$/g, ''), p.initializer
           ]));
           const key = readString(fields.get('find'));
-          const value = readString(fields.get('replacement'));
+          const value = readReplacement(fields.get('replacement'));
           if (key && value !== null) addAlias(key, value, resolvedRoot);
         }
       }
