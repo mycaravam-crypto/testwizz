@@ -1,0 +1,13 @@
+{
+  "targetSignature": "Vue composable useCart",
+  "members": [
+    "dependency:useCartStore",
+    "export:useCart",
+    "imports:@/stores/cart",
+    "imports:vue"
+  ],
+  "relatedTests": [
+    { "name": "useCart.test.ts", "file": "src/composables/useCart.test.ts", "matchedOn": "basename" }
+  ],
+  "unavailable": ["coverage", "runtimeBehavior"]
+}

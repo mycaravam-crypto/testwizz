@@ -1,0 +1,14 @@
+{
+  "targetSignature": "Pinia store counter",
+  "members": [
+    "export:useCounterStore",
+    "imports:pinia",
+    "imports:vue",
+    "store-action:increment",
+    "store-getter:doubled",
+    "store-state:count",
+    "store:counter"
+  ],
+  "relatedTests": [],
+  "unavailable": ["coverage", "runtimeBehavior"]
+}
