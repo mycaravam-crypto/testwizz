@@ -117,10 +117,8 @@ public static class VueContext
                 null, new TargetInfo("type", "vue:" + relative, name, null, null, name, "public", [], null, []),
                 new SourceInfo(relative, 1, source.Split('\n').Length, Convert.ToHexStringLower(SHA256.HashData(bytes)),
                     truncated ? source[..maxChars] : source, truncated, null), null,
-                members, [], [], [], [],
-                [new("propDetails", "Prop types, defaults and validators not yet extracted."),
-                 new("emitPaths", "Emit call sites and payload types not yet extracted."),
-                 new("relatedTests", "Vue test relationship mapping not yet available."),
+                members, [], [], [], relatedTests,
+                [new("emitPaths", "Emit call sites and payload types are not yet mapped to source locations."),
                  new("coverage", "No coverage measurement available.")], []);
         }
         catch (System.ComponentModel.Win32Exception)
