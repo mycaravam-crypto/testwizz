@@ -1,0 +1,23 @@
+{
+  "targetSignature": "CartItem",
+  "members": [
+    "computed isVisible",
+    "computed quantityLabel",
+    "emit select(id: number)",
+    "exposed focus",
+    "import @/utils/cart -> src/utils/cart.ts (alias)",
+    "imports @/utils/cart",
+    "imports vue",
+    "imports vue-router",
+    "mockCandidates useRouter",
+    "prop count: number (required: false, default: 0, validator: none)",
+    "prop title: string (required: true, default: none, validator: none)",
+    "slots actions",
+    "watched () => props.count"
+  ],
+  "relatedTests": [
+    { "name": "CartItem.spec.ts", "file": "src/components/CartItem.spec.ts", "matchedOn": "basename" },
+    { "name": "CartItemInteractions.test.ts", "file": "src/components/CartItemInteractions.test.ts", "matchedOn": "import" }
+  ],
+  "unavailable": ["emitPaths", "coverage"]
+}
