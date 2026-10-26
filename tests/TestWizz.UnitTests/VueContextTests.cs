@@ -79,6 +79,18 @@ public sealed class VueContextTests
         Assert.Contains(context.Members, member => member.Signature.StartsWith("action clear:", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void ExtractsPiniaSetupStoreReturnedStateGettersAndActions()
+    {
+        string root = FindVueFixtureRoot();
+        ContextDocument context = VueTypeScriptContext.Load(root, "src/stores/useCounterStore.ts", 20_000);
+
+        Assert.Equal("Pinia store counter", context.Target.Signature);
+        Assert.Contains(context.Members, member => member.Signature == "state count: count");
+        Assert.Contains(context.Members, member => member.Signature == "getter doubled: doubled");
+        Assert.Contains(context.Members, member => member.Signature == "action increment: increment");
+    }
+
     private static string FindVueFixtureRoot()
     {
         for (DirectoryInfo? directory = new(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
