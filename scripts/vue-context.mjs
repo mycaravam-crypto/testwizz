@@ -107,6 +107,17 @@ const collectEmitType = node => {
 const visit = node => {
   if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
     const call = node.expression.text;
+    if (call === 'withDefaults') {
+      const defaults = node.arguments[1];
+      if (defaults && ts.isObjectLiteralExpression(defaults)) {
+        for (const entry of defaults.properties) {
+          if (!entry.name) continue;
+          const name = cleanName(entry.name);
+          const existing = propDetails.get(name);
+          if (existing) propDetails.set(name, { ...existing, defaultValue: entry.initializer?.getText(ast) ?? null });
+        }
+      }
+    }
     if (call === 'defineProps') {
       node.typeArguments?.forEach(collectNames);
       const obj = node.arguments[0];
