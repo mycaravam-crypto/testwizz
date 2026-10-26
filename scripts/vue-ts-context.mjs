@@ -54,6 +54,7 @@ const collectSetupStore = (callback, storeName) => {
   if (!body || !ts.isBlock(body)) return;
   const returned = body.statements.filter(ts.isReturnStatement).at(-1)?.expression;
   const localActions = new Set();
+  const localGetters = new Set();
   for (const statement of body.statements) {
     if (ts.isFunctionDeclaration(statement) && statement.name) localActions.add(statement.name.text);
     if (ts.isVariableStatement(statement)) {
@@ -61,6 +62,9 @@ const collectSetupStore = (callback, storeName) => {
         const init = unwrap(declaration.initializer);
         if (nameOf(declaration) && init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init)))
           localActions.add(nameOf(declaration));
+        if (nameOf(declaration) && init && ts.isCallExpression(init) &&
+            ts.isIdentifier(init.expression) && init.expression.text === 'computed')
+          localGetters.add(nameOf(declaration));
       }
     }
   }
@@ -73,8 +77,9 @@ const collectSetupStore = (callback, storeName) => {
       add('store-action:' + name, 'action ' + name + ' ' + textOf(property), property);
     } else {
       const init = ts.isPropertyAssignment(property) ? unwrap(property.initializer) : null;
-      const role = init && ts.isCallExpression(init) && ts.isIdentifier(init.expression) &&
-        init.expression.text === 'computed' ? 'getter' : 'state';
+      const role = (init && ts.isCallExpression(init) && ts.isIdentifier(init.expression) &&
+        init.expression.text === 'computed') ||
+        (ts.isShorthandPropertyAssignment(property) && localGetters.has(name)) ? 'getter' : 'state';
       add('store-' + role + ':' + name, role + ' ' + name + ': ' + textOf(property), property);
     }
   }
