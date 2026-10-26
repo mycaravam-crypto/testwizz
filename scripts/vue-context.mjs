@@ -47,6 +47,7 @@ const props = new Set();
 const emits = new Set();
 const slots = new Set();
 const propDetails = new Map();
+const propDefaults = new Map();
 const emitDetails = new Map();
 const exposed = new Set();
 const computed = new Set();
@@ -113,8 +114,7 @@ const visit = node => {
         for (const entry of defaults.properties) {
           if (!entry.name) continue;
           const name = cleanName(entry.name);
-          const existing = propDetails.get(name);
-          if (existing) propDetails.set(name, { ...existing, defaultValue: entry.initializer?.getText(ast) ?? null });
+          propDefaults.set(name, entry.initializer?.getText(ast) ?? null);
         }
       }
     }
@@ -185,6 +185,10 @@ for (const statement of ast.statements) {
   }
 }
 visit(ast);
+for (const [name, defaultValue] of propDefaults) {
+  const existing = propDetails.get(name);
+  if (existing) propDetails.set(name, { ...existing, defaultValue });
+}
 if (descriptor.template) {
   // Vue's template AST exposes slot outlet names and named-slot declarations.
   const walk = node => {
