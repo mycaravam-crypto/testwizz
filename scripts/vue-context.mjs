@@ -54,9 +54,8 @@ const watched = new Set();
 const imports = new Set();
 const mockCandidates = new Set();
 const cleanName = name => name?.getText(ast).replace(/^['"]|['"]$/g, '') ?? '';
-const collectNames = node => {
-  if (!ts.isTypeLiteralNode(node)) return;
-  for (const member of node.members) {
+const collectPropMembers = members => {
+  for (const member of members) {
     if (!member.name) continue;
     const name = cleanName(member.name);
     if (!name) continue;
@@ -65,6 +64,18 @@ const collectNames = node => {
     const optional = !!member.questionToken;
     propDetails.set(name, { name, type, required: !optional, defaultValue: null, validator: null });
   }
+};
+const collectNames = node => {
+  if (ts.isTypeLiteralNode(node) || ts.isInterfaceDeclaration(node)) {
+    collectPropMembers(node.members);
+    return;
+  }
+  if (!ts.isTypeReferenceNode(node) || !ts.isIdentifier(node.typeName)) return;
+  const declaration = ast.statements.find(statement =>
+    (ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement)) &&
+    statement.name.text === node.typeName.text);
+  if (declaration && ts.isInterfaceDeclaration(declaration)) collectPropMembers(declaration.members);
+  if (declaration && ts.isTypeAliasDeclaration(declaration)) collectNames(declaration.type);
 };
 const collectEmitType = node => {
   if (!ts.isTypeLiteralNode(node)) return;
