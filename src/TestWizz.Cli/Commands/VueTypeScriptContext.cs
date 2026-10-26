@@ -95,7 +95,7 @@ public static class VueTypeScriptContext
                 null, new TargetInfo("type", "vue:" + relative, name, null, null,
                     kind == "pinia-store" ? "Pinia store " + name : "Vue composable " + name,
                     "public", [], null, []),
-                new SourceInfo(relative, 1, source.Split('\\n').Length,
+                new SourceInfo(relative, 1, source.Split('\n').Length,
                     Convert.ToHexStringLower(SHA256.HashData(bytes)), truncated ? source[..maxChars] : source, truncated, null),
                 null, members.OrderBy(m => m.Id, StringComparer.Ordinal).ToArray(), [], [], [], relatedTests,
                 [new("coverage", "No coverage measurement available."),
