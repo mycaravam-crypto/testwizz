@@ -69,11 +69,24 @@ const collectNames = node => {
 const collectEmitType = node => {
   if (!ts.isTypeLiteralNode(node)) return;
   for (const member of node.members) {
+    if (ts.isCallSignatureDeclaration(member)) {
+      const [eventParameter, ...payloadParameters] = member.parameters;
+      const eventType = eventParameter?.type;
+      const name = eventType && ts.isLiteralTypeNode(eventType) && ts.isStringLiteral(eventType.literal)
+        ? eventType.literal.text
+        : '';
+      if (!name) continue;
+      emits.add(name);
+      const payload = payloadParameters.map(parameter =>
+        `${parameter.name.getText(ast)}: ${parameter.type?.getText(ast) ?? 'unknown'}`).join(', ');
+      emitDetails.set(name, { name, payload });
+      continue;
+    }
     if (!member.name) continue;
     const name = cleanName(member.name);
     if (!name) continue;
     emits.add(name);
-    const parameters = ts.isMethodSignature(member) || ts.isCallSignatureDeclaration(member)
+    const parameters = ts.isMethodSignature(member)
       ? member.parameters.map(parameter => `${parameter.name.getText(ast)}: ${parameter.type?.getText(ast) ?? 'unknown'}`)
       : [];
     const payload = parameters.length > 0 ? parameters.join(', ') : member.type?.getText(ast) ?? '';
