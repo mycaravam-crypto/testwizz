@@ -216,6 +216,173 @@ if (descriptor.template) {
   };
   walk(descriptor.template.ast);
 }
+
+// Resolve project-local import aliases without executing vite.config or other project code.
+const aliases = [];
+const addAlias = (pattern, replacement, baseDirectory) => {
+  if (!pattern || typeof replacement !== 'string') return;
+  const target = path.isAbsolute(replacement)
+    ? replacement
+    : path.resolve(baseDirectory, replacement);
+  aliases.push({ pattern, target });
+};
+for (const configName of ['tsconfig.json', 'jsconfig.json']) {
+  const configPath = path.join(resolvedRoot, configName);
+  if (!fs.existsSync(configPath)) continue;
+  const read = ts.readConfigFile(configPath, ts.sys.readFile);
+  if (read.error) continue;
+  const parsedConfig = ts.parseJsonConfigFileContent(read.config, ts.sys, resolvedRoot, undefined, configPath);
+  const baseDirectory = parsedConfig.options.baseUrl ?? resolvedRoot;
+  for (const [pattern, targets] of Object.entries(parsedConfig.options.paths ?? {})) {
+    for (const target of targets) addAlias(pattern, target, baseDirectory);
+  }
+}
+const viteConfig = fs.readdirSync(resolvedRoot)
+  .filter(name => /^vite\.config\.(?:[cm]?[jt]s)$/.test(name))
+  .sort()[0];
+if (viteConfig) {
+  const configSource = fs.readFileSync(path.join(resolvedRoot, viteConfig), 'utf8');
+  const configAst = ts.createSourceFile(viteConfig, configSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const readString = node => node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
+    ? node.text : null;
+  const readReplacement = node => {
+    const direct = readString(node);
+    if (direct !== null) return direct;
+    if (!node || !ts.isCallExpression(node)) return null;
+    const expression = node.expression.getText(configAst);
+    if (expression.endsWith('.resolve') || expression === 'resolve') {
+      const args = [...node.arguments];
+      const first = args[0]?.getText(configAst);
+      if (first === '__dirname' || first === 'import.meta.dirname') {
+        const segments = args.slice(1).map(readString);
+        if (segments.every(segment => segment !== null)) return path.resolve(resolvedRoot, ...segments);
+      }
+    }
+    if (expression.endsWith('fileURLToPath') && node.arguments[0] && ts.isNewExpression(node.arguments[0])) {
+      const urlCall = node.arguments[0];
+      const urlSpecifier = readString(urlCall.arguments?.[0]);
+      if (urlSpecifier?.startsWith('.')) return path.resolve(resolvedRoot, urlSpecifier);
+    }
+    return null;
+  };
+  const visitAliases = node => {
+    if (ts.isPropertyAssignment(node) && node.name.getText(configAst).replace(/^['"]|['"]$/g, '') === 'alias') {
+      if (ts.isObjectLiteralExpression(node.initializer)) {
+        for (const entry of node.initializer.properties) {
+          if (!ts.isPropertyAssignment(entry)) continue;
+          const key = readString(entry.name) ?? entry.name.getText(configAst).replace(/^['"]|['"]$/g, '');
+          const value = readReplacement(entry.initializer);
+          if (value !== null) addAlias(key, value, resolvedRoot);
+        }
+      } else if (ts.isArrayLiteralExpression(node.initializer)) {
+        for (const entry of node.initializer.elements) {
+          if (!ts.isObjectLiteralExpression(entry)) continue;
+          const fields = new Map(entry.properties.filter(ts.isPropertyAssignment).map(p => [
+            p.name.getText(configAst).replace(/^['"]|['"]$/g, ''), p.initializer
+          ]));
+          const key = readString(fields.get('find'));
+          const value = readReplacement(fields.get('replacement'));
+          if (key && value !== null) addAlias(key, value, resolvedRoot);
+        }
+      }
+    }
+    ts.forEachChild(node, visitAliases);
+  };
+  visitAliases(configAst);
+}
+const resolveModule = specifier => {
+  const alias = aliases
+    .filter(item => specifier === item.pattern.replace(/\/\*$/, '') ||
+      (item.pattern.includes('*') && specifier.startsWith(item.pattern.split('*')[0]) &&
+       specifier.endsWith(item.pattern.split('*')[1] ?? '')) ||
+      (!item.pattern.includes('*') && specifier.startsWith(item.pattern + '/')))
+    .sort((a, b) => b.pattern.length - a.pattern.length)[0];
+  if (!alias) return null;
+  const wildcard = alias.pattern.indexOf('*');
+  const suffix = wildcard >= 0 ? alias.pattern.slice(wildcard + 1) : '';
+  const prefix = wildcard >= 0 ? alias.pattern.slice(0, wildcard) : alias.pattern;
+  const remainder = wildcard >= 0
+    ? specifier.slice(prefix.length, specifier.length - suffix.length)
+    : specifier === alias.pattern ? '' : specifier.slice(alias.pattern.length + 1);
+  const base = wildcard >= 0
+    ? alias.target.replace(/\*$/, '') + remainder
+    : path.join(alias.target, remainder);
+  const candidates = [base, ...['.ts', '.tsx', '.js', '.jsx', '.vue', '.d.ts'].map(ext => base + ext),
+    ...['index.ts', 'index.tsx', 'index.js', 'index.vue'].map(name => path.join(base, name))];
+  for (const candidate of candidates) {
+    if (!fs.existsSync(candidate)) continue;
+    try {
+      if (fs.statSync(candidate).isFile()) return path.relative(resolvedRoot, candidate).split(path.sep).join('/');
+    } catch { /* Ignore inaccessible candidates; resolution remains unavailable. */ }
+  }
+  return null;
+};
+const resolvedImports = [...imports].sort().map(specifier => ({
+  specifier,
+  path: resolveModule(specifier),
+  kind: resolveModule(specifier) ? 'alias' : 'unresolved-or-external'
+}));
+const ignoredDirectories = new Set(['node_modules', 'dist', 'build', '.git', 'coverage']);
+const projectFiles = [];
+const walkFiles = directory => {
+  let entries;
+  try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch { return; }
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (entry.isDirectory()) {
+      if (!ignoredDirectories.has(entry.name)) walkFiles(path.join(directory, entry.name));
+    } else if (entry.isFile()) {
+      projectFiles.push(path.join(directory, entry.name));
+    }
+  }
+};
+walkFiles(resolvedRoot);
+const targetBase = path.basename(filename, path.extname(filename));
+const testFiles = projectFiles.filter(file => /\.(?:spec|test)\.(?:ts|tsx|js|jsx|mjs|cjs)$/.test(file));
+const resolveImportFrom = (specifier, importerFile) => {
+  const aliasPath = resolveModule(specifier);
+  if (aliasPath) return aliasPath;
+  if (!specifier.startsWith('.')) return null;
+  const base = path.resolve(path.dirname(importerFile), specifier);
+  const relativeBase = path.relative(resolvedRoot, base);
+  if (relativeBase === '..' || relativeBase.startsWith('..' + path.sep) || path.isAbsolute(relativeBase)) return null;
+  const candidates = [base, ...['.ts', '.tsx', '.js', '.jsx', '.vue', '.d.ts'].map(ext => base + ext),
+    ...['index.ts', 'index.tsx', 'index.js', 'index.vue'].map(name => path.join(base, name))];
+  for (const candidate of candidates) {
+    if (!fs.existsSync(candidate)) continue;
+    try {
+      if (fs.statSync(candidate).isFile()) return path.relative(resolvedRoot, candidate).split(path.sep).join('/');
+    } catch { /* Ignore inaccessible candidates. */ }
+  }
+  return null;
+};
+const relatedTests = [];
+for (const testFile of testFiles) {
+  const relativeTest = path.relative(resolvedRoot, testFile).split(path.sep).join('/');
+  let testSource;
+  try { testSource = fs.readFileSync(testFile, 'utf8'); } catch { continue; }
+  const baseName = path.basename(testFile);
+  let matchedOn = null;
+  let line = 1;
+  if (baseName.startsWith(targetBase + '.')) {
+    matchedOn = 'basename';
+  } else {
+    const scriptKind = /\.tsx$/.test(testFile) ? ts.ScriptKind.TSX
+      : /\.jsx$/.test(testFile) ? ts.ScriptKind.JSX : ts.ScriptKind.TS;
+    const testAst = ts.createSourceFile(testFile, testSource, ts.ScriptTarget.Latest, true, scriptKind);
+    const visitTestImports = node => {
+      if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) &&
+          resolveImportFrom(node.moduleSpecifier.text, testFile) === relative) {
+        matchedOn = 'import';
+        line = testAst.getLineAndCharacterOfPosition(node.getStart(testAst)).line + 1;
+      }
+      ts.forEachChild(node, visitTestImports);
+    };
+    visitTestImports(testAst);
+  }
+  if (matchedOn) relatedTests.push({ name: baseName, file: relativeTest, line, matchedOn });
+}
+relatedTests.sort((a, b) => a.file.localeCompare(b.file));
+
 console.log(JSON.stringify({
   propDetails: [...propDetails.values()].sort((a, b) => a.name.localeCompare(b.name)),
   emitDetails: [...emitDetails.values()].sort((a, b) => a.name.localeCompare(b.name)),
@@ -224,6 +391,8 @@ console.log(JSON.stringify({
   watched: [...watched].sort(),
   imports: [...imports].sort(),
   mockCandidates: [...mockCandidates].sort(),
+  resolvedImports,
+  relatedTests,
   name: path.basename(filename, '.vue'),
   bindings: Object.keys(bindings).sort().map(name => ({ name, kind: bindings[name] })),
   template: !!descriptor.template,
