@@ -1,0 +1,12 @@
+{
+  "targetSignature": "Pinia store counter",
+  "members": [
+    "export:useCounterStore",
+    "store-action:increment",
+    "store-getter:doubled",
+    "store-state:count",
+    "store:counter"
+  ],
+  "relatedTests": [],
+  "unavailable": ["coverage", "runtimeBehavior"]
+}
