@@ -274,7 +274,8 @@ const resolveModule = specifier => {
   const alias = aliases
     .filter(item => specifier === item.pattern.replace(/\/\*$/, '') ||
       (item.pattern.includes('*') && specifier.startsWith(item.pattern.split('*')[0]) &&
-       specifier.endsWith(item.pattern.split('*')[1] ?? '')))
+       specifier.endsWith(item.pattern.split('*')[1] ?? '')) ||
+      (!item.pattern.includes('*') && specifier.startsWith(item.pattern + '/')))
     .sort((a, b) => b.pattern.length - a.pattern.length)[0];
   if (!alias) return null;
   const wildcard = alias.pattern.indexOf('*');
@@ -282,8 +283,10 @@ const resolveModule = specifier => {
   const prefix = wildcard >= 0 ? alias.pattern.slice(0, wildcard) : alias.pattern;
   const remainder = wildcard >= 0
     ? specifier.slice(prefix.length, specifier.length - suffix.length)
-    : '';
-  const base = wildcard >= 0 ? alias.target.replace(/\*$/, '') + remainder : alias.target;
+    : specifier === alias.pattern ? '' : specifier.slice(alias.pattern.length + 1);
+  const base = wildcard >= 0
+    ? alias.target.replace(/\*$/, '') + remainder
+    : path.join(alias.target, remainder);
   const candidates = [base, ...['.ts', '.tsx', '.js', '.jsx', '.vue', '.d.ts'].map(ext => base + ext),
     ...['index.ts', 'index.tsx', 'index.js', 'index.vue'].map(name => path.join(base, name))];
   for (const candidate of candidates) {
