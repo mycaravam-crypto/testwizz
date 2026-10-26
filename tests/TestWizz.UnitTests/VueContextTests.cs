@@ -42,6 +42,8 @@ public sealed class VueContextTests
         Assert.Contains(context.Members, member => member.Signature == "import @/utils/cart -> src/utils/cart.ts (alias)");
         Assert.Contains(context.RelatedTests, test =>
             test.File == "src/components/CartItem.spec.ts" && test.MatchedOn == "basename");
+        Assert.Contains(context.RelatedTests, test =>
+            test.File == "src/components/CartItemInteractions.test.ts" && test.MatchedOn == "import");
 
     }
 
