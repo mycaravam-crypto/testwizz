@@ -4,7 +4,7 @@ import path from 'node:path';
 
 const [rootArg, relative] = process.argv.slice(2);
 if (!rootArg || !relative || path.isAbsolute(relative) || relative.split(/[\\/]/).includes('..') ||
-    !/\\.tsx?$/.test(relative) || !/(^|[\\/])(composables|stores)[\\/]/.test(relative)) {
+    !/\.tsx?$/.test(relative) || !/(^|[\\/])(composables|stores)[\\/]/.test(relative)) {
   console.error('Target must be a project-relative .ts/.tsx file under src/composables or src/stores.');
   process.exit(2);
 }
@@ -165,7 +165,7 @@ const walk = directory => {
   try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch { return; }
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.isDirectory()) { if (!ignored.has(entry.name)) walk(path.join(directory, entry.name)); }
-    else if (entry.isFile() && /\\.(?:spec|test)\\.(?:ts|tsx|js|jsx|mjs|cjs)$/.test(entry.name))
+    else if (entry.isFile() && /\.(?:spec|test)\.(?:ts|tsx|js|jsx|mjs|cjs)$/.test(entry.name))
       testFiles.push(path.join(directory, entry.name));
   }
 };
@@ -183,7 +183,7 @@ for (const testFile of testFiles) {
     const visitImports = node => {
       if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
         const specifier = node.moduleSpecifier.text;
-        const importedBase = path.basename(specifier.replace(/\\.(?:tsx?|jsx?)$/, ''));
+        const importedBase = path.basename(specifier.replace(/\.(?:tsx?|jsx?)$/, ''));
         if (specifier === './' + targetName || specifier.endsWith('/' + targetName) ||
             importedBase === targetName || specifier.endsWith('/' + targetName + '.ts')) {
           matchedOn = 'import'; line = testAst.getLineAndCharacterOfPosition(node.getStart(testAst)).line + 1;
