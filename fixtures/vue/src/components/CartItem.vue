@@ -22,6 +22,7 @@ const router = useRouter();
 <template>
   <section v-if="isVisible">
     <h2>{{ title }}</h2>
+    <button @click="emit('select', count)">Select</button>
     <slot name="actions" />
   </section>
 </template>
