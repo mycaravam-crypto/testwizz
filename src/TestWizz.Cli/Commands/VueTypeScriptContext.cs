@@ -13,7 +13,7 @@ public static class VueTypeScriptContext
     {
         string relative = target.Replace('\\', '/');
         if (Path.IsPathRooted(relative) || relative.Split('/').Any(part => part is "." or ".." or "")
-            || !relative.EndsWith(".ts", StringComparison.OrdinalIgnoreCase)
+            || !(relative.EndsWith(".ts", StringComparison.OrdinalIgnoreCase) || relative.EndsWith(".tsx", StringComparison.OrdinalIgnoreCase))
             || !relative.Split('/').Any(part => part is "composables" or "stores"))
             throw new ContextException("target.invalid", "Vue composable/store target must be a project-relative .ts file under a composables or stores directory.");
 
