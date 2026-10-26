@@ -12,11 +12,11 @@ public static class ContextCommand
 
     public static CommandDefinition Definition { get; } = new(
         "context",
-        "Show what TestWizz knows about a C# type or method (testwizz.context/v1).",
+        "Show extracted context for a C# symbol or Vue component, composable, or Pinia store (testwizz.context/v1).",
         "testwizz context [path] --for <target> [--max-chars <n>]",
         Options:
         [
-            new(ForOption, "Type or method, e.g. OrderService, OrderService.PlaceOrderAsync, Calculator.Percentage(decimal, int).", "target"),
+            new(ForOption, "C# type/method, Vue .vue file, or project-relative composable/store path.", "target"),
             new(MaxCharsOption, $"Maximum source excerpt length (default {RoslynContextProvider.DefaultMaxExcerptChars}).", "n"),
         ],
         MaxArguments: 1,
@@ -54,9 +54,14 @@ public static class ContextCommand
 
         try
         {
-            return target.EndsWith(".vue", StringComparison.OrdinalIgnoreCase)
-                ? VueContext.Load(root, target, maxChars)
-                : RoslynContextProvider.Load(root).GetContext(target, CliApp.Version, maxChars);
+            string normalizedTarget = target.Replace('\\', '/');
+            if (normalizedTarget.EndsWith(".vue", StringComparison.OrdinalIgnoreCase))
+                return VueContext.Load(root, target, maxChars);
+            if ((normalizedTarget.EndsWith(".ts", StringComparison.OrdinalIgnoreCase)
+                    || normalizedTarget.EndsWith(".tsx", StringComparison.OrdinalIgnoreCase))
+                && normalizedTarget.Split('/').Any(part => part is "composables" or "stores"))
+                return VueTypeScriptContext.Load(root, target, maxChars);
+            return RoslynContextProvider.Load(root).GetContext(target, CliApp.Version, maxChars);
         }
         catch (ContextException ex)
         {

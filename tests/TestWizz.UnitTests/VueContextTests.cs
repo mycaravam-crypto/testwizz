@@ -47,6 +47,52 @@ public sealed class VueContextTests
 
     }
 
+    [Fact]
+    public void ExtractsComposablePublicSurfaceAndRelatedTests()
+    {
+        string root = FindVueFixtureRoot();
+        ContextDocument context = VueTypeScriptContext.Load(root, "src/composables/useCart.ts", 20_000);
+
+        Assert.Equal("vue", context.Stack);
+        Assert.Equal("Vue composable useCart", context.Target.Signature);
+        Assert.Contains(context.Members, member => member.Signature.StartsWith("export function useCart(", StringComparison.Ordinal));
+        Assert.Contains(context.Members, member => member.Signature == "imports vue");
+        Assert.Contains(context.Members, member => member.Signature == "imports @/stores/cart");
+        Assert.Contains(context.Members, member => member.Signature == "dependency useCartStore");
+        Assert.Contains(context.RelatedTests, test =>
+            test.File == "src/composables/useCart.test.ts" && test.MatchedOn == "basename");
+    }
+
+    [Fact]
+    public void ExtractsPiniaStoreStateGettersAndActions()
+    {
+        string root = FindVueFixtureRoot();
+        ContextDocument context = VueTypeScriptContext.Load(root, "src/stores/cart.ts", 20_000);
+
+        Assert.Equal("vue", context.Stack);
+        Assert.Equal("Pinia store cart", context.Target.Signature);
+        Assert.Equal("cart", context.Target.Name);
+        Assert.Contains(context.Members, member => member.Signature == "Pinia store cart");
+        Assert.Contains(context.Members, member => member.Signature.StartsWith("state items:", StringComparison.Ordinal));
+        Assert.Contains(context.Members, member => member.Signature.StartsWith("state loading:", StringComparison.Ordinal));
+        Assert.Contains(context.Members, member => member.Signature.StartsWith("getter itemCount:", StringComparison.Ordinal));
+        Assert.Contains(context.Members, member => member.Signature.StartsWith("action addItem:", StringComparison.Ordinal));
+        Assert.Contains(context.Members, member => member.Signature.StartsWith("action clear:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ExtractsPiniaSetupStoreReturnedStateGettersAndActions()
+    {
+        string root = FindVueFixtureRoot();
+        ContextDocument context = VueTypeScriptContext.Load(root, "src/stores/useCounterStore.ts", 20_000);
+
+        Assert.Equal("Pinia store counter", context.Target.Signature);
+        Assert.Equal("counter", context.Target.Name);
+        Assert.Contains(context.Members, member => member.Signature == "state count: count");
+        Assert.Contains(context.Members, member => member.Signature == "getter doubled: doubled");
+        Assert.Contains(context.Members, member => member.Signature == "action increment: increment");
+    }
+
     private static string FindVueFixtureRoot()
     {
         for (DirectoryInfo? directory = new(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
