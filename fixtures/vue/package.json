@@ -1,0 +1,9 @@
+{
+  "name": "testwizz-vue-context-fixture",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@vue/compiler-sfc": "3.5.22",
+    "typescript": "5.9.3"
+  }
+}
