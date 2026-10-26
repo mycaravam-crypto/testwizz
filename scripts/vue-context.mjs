@@ -76,7 +76,8 @@ const collectEmitType = node => {
     const parameters = ts.isMethodSignature(member) || ts.isCallSignatureDeclaration(member)
       ? member.parameters.map(parameter => `${parameter.name.getText(ast)}: ${parameter.type?.getText(ast) ?? 'unknown'}`)
       : [];
-    emitDetails.set(name, { name, payload: parameters.join(', ') });
+    const payload = parameters.length > 0 ? parameters.join(', ') : member.type?.getText(ast) ?? '';
+    emitDetails.set(name, { name, payload });
   }
 };
 const visit = node => {
