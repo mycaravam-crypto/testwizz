@@ -53,11 +53,23 @@ const collectSetupStore = (callback, storeName) => {
   const body = callback && (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) ? callback.body : null;
   if (!body || !ts.isBlock(body)) return;
   const returned = body.statements.filter(ts.isReturnStatement).at(-1)?.expression;
+  const localActions = new Set();
+  for (const statement of body.statements) {
+    if (ts.isFunctionDeclaration(statement) && statement.name) localActions.add(statement.name.text);
+    if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) {
+        const init = unwrap(declaration.initializer);
+        if (nameOf(declaration) && init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init)))
+          localActions.add(nameOf(declaration));
+      }
+    }
+  }
   for (const property of objectProperties(returned)) {
     const name = nameOf(property.name);
     if (!name) continue;
     if (ts.isMethodDeclaration(property) || (ts.isPropertyAssignment(property) &&
-        (ts.isArrowFunction(property.initializer) || ts.isFunctionExpression(property.initializer)))) {
+        (ts.isArrowFunction(property.initializer) || ts.isFunctionExpression(property.initializer))) ||
+        (ts.isShorthandPropertyAssignment(property) && localActions.has(name))) {
       add('store-action:' + name, 'action ' + name + ' ' + textOf(property), property);
     } else {
       const init = ts.isPropertyAssignment(property) ? unwrap(property.initializer) : null;
