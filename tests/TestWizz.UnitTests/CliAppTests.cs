@@ -23,6 +23,27 @@ public sealed class CliAppTests : IDisposable
     private static JsonObject ParseJson(string stdout) => JsonNode.Parse(stdout)!.AsObject();
 
     [Fact]
+    public void Bootstrap_RequiresExplicitAllFlag()
+    {
+        var (exit, stdout, _) = Run("bootstrap", "--format", "json");
+        Assert.Equal(ExitCodes.Error, exit);
+        Assert.Equal("usage", (string)ParseJson(stdout)["error"]!["code"]!);
+    }
+
+    [Fact]
+    public void Bootstrap_EmptyRepository_HasDeterministicJsonResult()
+    {
+        var (exit, stdout, stderr) = Run("bootstrap", "--all", "--generate-only", "--format", "json");
+        Assert.Equal(ExitCodes.Success, exit);
+        var json = ParseJson(stdout);
+        Assert.Equal("bootstrap", (string)json["command"]!);
+        Assert.Equal("testwizz.bootstrap/v1", (string)json["result"]!["schema"]!);
+        Assert.Equal(0, (int)json["result"]!["total"]!);
+        Assert.Empty(json["result"]!["items"]!.AsArray());
+        Assert.Contains("No eligible C# methods", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void NoArguments_ShowsHelp()
     {
         var (exit, stdout, stderr) = Run();
@@ -39,7 +60,7 @@ public sealed class CliAppTests : IDisposable
 
         Assert.Equal(ExitCodes.Success, exit);
         var names = ParseJson(stdout)["result"]!["commands"]!.AsArray().Select(c => (string)c!["name"]!);
-        Assert.Equal(["help", "init", "config", "ai", "context", "plan", "generate", "run", "apply"], names);
+        Assert.Equal(["help", "init", "config", "ai", "context", "plan", "generate", "bootstrap", "run", "apply"], names);
     }
 
     [Theory]

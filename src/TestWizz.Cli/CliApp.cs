@@ -28,6 +28,7 @@ public sealed class CliApp(
         ContextCommand.Definition,
         PlanCommand.Definition,
         GenerateCommand.Definition,
+        BootstrapCommand.Definition,
         RunCommand.Definition,
         ApplyCommand.Definition,
     ];

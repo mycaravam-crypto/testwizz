@@ -79,6 +79,24 @@ public sealed class RoslynContextProvider
 
     public static RoslynContextProvider Load(string root) => new(Path.GetFullPath(root));
 
+    /// <summary>Discover eligible named C# methods, excluding test files and declarations without bodies.</summary>
+    /// <remarks>Documentation IDs are stable, overload-safe targets for GetContext.</remarks>
+    public IReadOnlyList<string> DiscoverMethods() =>
+        [.. Candidates()
+            .Where(candidate => candidate.Node is MethodDeclarationSyntax method
+                && (method.Body is not null || method.ExpressionBody is not null)
+                && !method.Modifiers.Any(SyntaxKind.AbstractKeyword))
+            .Select(candidate => new
+            {
+                candidate.Id,
+                Symbol = _compilation.GetSemanticModel(candidate.File.Tree).GetDeclaredSymbol(candidate.Node),
+            })
+            .Where(item => item.Symbol?.DeclaredAccessibility is Accessibility.Public or Accessibility.Internal or Accessibility.ProtectedOrInternal)
+            .Select(item => item.Id)
+            .Where(id => id.StartsWith("M:", StringComparison.Ordinal))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(id => id, StringComparer.Ordinal)];
+
     /// <summary>Full path of the repository root the provider was loaded from.</summary>
     public string Root => _root;
 
