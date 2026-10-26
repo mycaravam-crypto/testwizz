@@ -26,8 +26,8 @@ public sealed class VueContextTests
     [Fact]
     public void ExtractsVuePublicSurfaceAndMockCandidates()
     {
-        string root = FindRepositoryRoot();
-        ContextDocument context = VueContext.Load(root, "fixtures/vue/src/components/CartItem.vue", 20_000);
+        string root = FindVueFixtureRoot();
+        ContextDocument context = VueContext.Load(root, "src/components/CartItem.vue", 20_000);
 
         Assert.Equal("vue", context.Stack);
         Assert.Contains(context.Members, member => member.Signature.Contains("prop title: string (required: true", StringComparison.Ordinal));
@@ -41,15 +41,16 @@ public sealed class VueContextTests
         Assert.Contains(context.Members, member => member.Signature == "slots actions");
     }
 
-    private static string FindRepositoryRoot()
+    private static string FindVueFixtureRoot()
     {
         for (DirectoryInfo? directory = new(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
         {
-            if (File.Exists(Path.Combine(directory.FullName, "fixtures", "vue", "package.json")))
-                return directory.FullName;
+            string fixtureRoot = Path.Combine(directory.FullName, "fixtures", "vue");
+            if (File.Exists(Path.Combine(fixtureRoot, "package.json")))
+                return fixtureRoot;
         }
 
-        throw new DirectoryNotFoundException("Could not locate the TestWizz repository root.");
+        throw new DirectoryNotFoundException("Could not locate the Vue fixture project root.");
     }
 
     [Fact]
