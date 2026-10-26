@@ -116,7 +116,7 @@ const visit = node => {
       const scriptStartOffset = descriptor.scriptSetup?.loc.start.offset ?? descriptor.script?.loc.start.offset ?? 0;
       emitCalls.push({
         name: event.text,
-        line: source.slice(0, scriptStartOffset + node.getStart(ast)).split('\\n').length,
+        line: source.slice(0, scriptStartOffset + node.getStart(ast)).split(/\n/).length,
         payloadCount: Math.max(0, node.arguments.length - 1)
       });
     }
