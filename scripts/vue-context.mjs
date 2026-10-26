@@ -116,6 +116,13 @@ const visit = node => {
       if (obj && ts.isArrayLiteralExpression(obj)) for (const element of obj.elements) {
         if (ts.isStringLiteral(element)) emits.add(element.text);
       }
+      if (obj && ts.isObjectLiteralExpression(obj)) for (const entry of obj.properties) {
+        if (!entry.name) continue;
+        const name = cleanName(entry.name);
+        if (!name) continue;
+        emits.add(name);
+        emitDetails.set(name, { name, payload: entry.initializer?.getText(ast) ?? '' });
+      }
     }
     if (call === 'defineExpose') {
       const obj = node.arguments[0];
@@ -149,6 +156,13 @@ if (descriptor.template) {
     if (node.type === 1 && node.tag === 'slot') {
       const name = node.props?.find(p => p.type === 6 && p.name === 'name');
       slots.add(name?.value?.content || 'default');
+    }
+    if (node.type === 1) {
+      for (const prop of node.props ?? []) {
+        if (prop.type === 7 && prop.name === 'slot' && prop.arg?.type === 4 && prop.arg.content) {
+          slots.add(prop.arg.content);
+        }
+      }
     }
     if (Array.isArray(node.children)) node.children.forEach(walk);
     if (Array.isArray(node.branches)) node.branches.forEach(walk);
