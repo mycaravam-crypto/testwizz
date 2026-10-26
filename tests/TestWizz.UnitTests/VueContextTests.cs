@@ -71,6 +71,7 @@ public sealed class VueContextTests
 
         Assert.Equal("vue", context.Stack);
         Assert.Equal("Pinia store cart", context.Target.Signature);
+        Assert.Equal("cart", context.Target.Name);
         Assert.Contains(context.Members, member => member.Signature == "Pinia store cart");
         Assert.Contains(context.Members, member => member.Signature.StartsWith("state items:", StringComparison.Ordinal));
         Assert.Contains(context.Members, member => member.Signature.StartsWith("state loading:", StringComparison.Ordinal));
@@ -86,6 +87,7 @@ public sealed class VueContextTests
         ContextDocument context = VueTypeScriptContext.Load(root, "src/stores/useCounterStore.ts", 20_000);
 
         Assert.Equal("Pinia store counter", context.Target.Signature);
+        Assert.Equal("counter", context.Target.Name);
         Assert.Contains(context.Members, member => member.Signature == "state count: count");
         Assert.Contains(context.Members, member => member.Signature == "getter doubled: doubled");
         Assert.Contains(context.Members, member => member.Signature == "action increment: increment");
