@@ -120,7 +120,7 @@ public static class BootstrapCommand
         return failed == 0 && skipped == 0 ? ExitCodes.Success : ExitCodes.ValidationFailed;
     }
 
-    private static IReadOnlyDictionary<string, string?> RunOptions(CommandContext context, string proposal)
+    private static Dictionary<string, string?> RunOptions(CommandContext context, string proposal)
     {
         var options = new Dictionary<string, string?>(StringComparer.Ordinal) { ["--proposal"] = proposal };
         if (context.Options.TryGetValue("--out", out var outputDirectory))
