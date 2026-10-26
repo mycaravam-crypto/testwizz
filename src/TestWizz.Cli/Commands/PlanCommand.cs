@@ -12,7 +12,7 @@ public static class PlanCommand
 
     public static CommandDefinition Definition { get; } = new(
         "plan",
-        "Plan evidence-linked test scenarios for a C# method (testwizz.plan/v1). Add --ai to let the local model propose more.",
+        "Plan evidence-linked test scenarios for a C# method or Vue emit call sites (testwizz.plan/v1). Add --ai to let the local model propose more.",
         "testwizz plan [path] --for <target> [--ai] [--max-chars <n>]",
         Options:
         [
@@ -25,7 +25,9 @@ public static class PlanCommand
     private static int Run(CommandContext context)
     {
         var document = ContextCommand.Load(context, Definition.Usage);
-        var extractor = new CSharpScenarioExtractor();
+        IScenarioExtractor extractor = document.Stack == "vue"
+            ? new VueScenarioExtractor()
+            : new CSharpScenarioExtractor();
         ExtractionResult extraction;
         try
         {
