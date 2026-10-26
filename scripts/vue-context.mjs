@@ -113,10 +113,10 @@ const visit = node => {
       (ts.isPropertyAccessExpression(expression) && expression.name.text === '$emit');
     const event = node.arguments[0];
     if (isEmitCall && event && (ts.isStringLiteral(event) || ts.isNoSubstitutionTemplateLiteral(event))) {
-      const scriptStartLine = descriptor.scriptSetup?.loc.start.line ?? descriptor.script?.loc.start.line ?? 1;
+      const scriptStartOffset = descriptor.scriptSetup?.loc.start.offset ?? descriptor.script?.loc.start.offset ?? 0;
       emitCalls.push({
         name: event.text,
-        line: scriptStartLine + ast.getLineAndCharacterOfPosition(node.getStart(ast)).line,
+        line: source.slice(0, scriptStartOffset + node.getStart(ast)).split('\\n').length,
         payloadCount: Math.max(0, node.arguments.length - 1)
       });
     }
