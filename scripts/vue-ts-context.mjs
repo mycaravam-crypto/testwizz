@@ -135,7 +135,6 @@ for (const statement of ast.statements) {
       if (!name) continue;
       const init = unwrap(declaration.initializer);
       if (init && ts.isCallExpression(init) && ts.isIdentifier(init.expression) && init.expression.text === 'defineStore') {
-        inspectStore(init);
         add('export:' + name, 'export Pinia store ' + name, declaration);
       } else {
         add('export:' + name, 'export const ' + name + (declaration.type ? ': ' + textOf(declaration.type) : '') +
