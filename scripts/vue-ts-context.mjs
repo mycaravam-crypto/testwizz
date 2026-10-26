@@ -76,7 +76,7 @@ const collectSetupStore = (callback, storeName) => {
     if (ts.isMethodDeclaration(property) || (ts.isPropertyAssignment(property) &&
         (ts.isArrowFunction(property.initializer) || ts.isFunctionExpression(property.initializer))) ||
         (ts.isShorthandPropertyAssignment(property) && localActions.has(name))) {
-      add('store-action:' + name, 'action ' + name + ' ' + textOf(property), property);
+      add('store-action:' + name, 'action ' + name + ': ' + textOf(property), property);
     } else {
       const init = ts.isPropertyAssignment(property) ? unwrap(property.initializer) : null;
       const role = (init && ts.isCallExpression(init) && ts.isIdentifier(init.expression) &&
