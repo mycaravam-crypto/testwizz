@@ -68,7 +68,7 @@ public static class BootstrapCommand
                     var runContext = context with
                     {
                         Command = RunCommand.Definition,
-                        Options = new Dictionary<string, string?>(StringComparer.Ordinal) { ["--proposal"] = proposal },
+                        Options = RunOptions(context, proposal),
                         Output = new CliOutput(runOutput, context.Output.Stderr, OutputFormat.Json),
                     };
                     var runExit = RunCommand.Definition.Handler(runContext);
@@ -77,13 +77,14 @@ public static class BootstrapCommand
                 else if (generationExit != ExitCodes.Success)
                     execution = "skipped";
             }
-            catch (Exception ex) when (ex is CliException or InvalidOperationException or IOException)
+            catch (Exception ex) when (ex is CliException or InvalidOperationException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException)
             {
                 error = ex is CliException cli ? cli.Code + ": " + cli.Message : ex.Message;
                 execution = "error";
+                context.Output.Stderr.WriteLine($"Target {target}: {error}");
             }
 
-            if (generation == "ok" && execution is "passed" or "not-run") succeeded++;
+            if (generation == "ok" && (execution is "passed" or "not-run")) succeeded++;
             else if (execution == "skipped") skipped++;
             else failed++;
 
@@ -102,6 +103,8 @@ public static class BootstrapCommand
             ReportProgress(context, i + 1, targets.Count, target, "complete");
         }
 
+        if (targets.Count == 0)
+            context.Output.Stderr.WriteLine("No eligible C# methods discovered.");
         text.Append(CultureInfo.InvariantCulture, $"\n{targets.Count} targets; {succeeded} successful, {failed} failed, {skipped} skipped. Proposals remain outside the repository; nothing was applied.\n");
         context.Output.Result("bootstrap", new JsonObject
         {
@@ -115,12 +118,31 @@ public static class BootstrapCommand
         return failed == 0 && skipped == 0 ? ExitCodes.Success : ExitCodes.ValidationFailed;
     }
 
+    private static IReadOnlyDictionary<string, string?> RunOptions(CommandContext context, string proposal)
+    {
+        var options = new Dictionary<string, string?>(StringComparer.Ordinal) { ["--proposal"] = proposal };
+        if (context.Options.TryGetValue("--out", out var outputDirectory))
+            options["--out"] = outputDirectory;
+        return options;
+    }
+
     private static void ReportProgress(CommandContext context, int completed, int total, string target, string phase)
     {
         var percent = total == 0 ? 100 : completed * 100 / total;
         var width = 20;
         var filled = percent * width / 100;
         var bar = new string('#', filled) + new string('-', width - filled);
-        context.Output.Stderr.WriteLine($"[{bar}] {percent,3}% ({completed}/{total}) {phase}: {target}");
+        var writer = context.Output.Stderr;
+        if (ReferenceEquals(writer, Console.Error) && !Console.IsErrorRedirected)
+        {
+            var maxWidth = Math.Max(20, Console.WindowWidth - 1);
+            var line = $"[{bar}] {percent,3}% ({completed}/{total}) {phase}: {target}";
+            writer.Write("\r" + (line.Length > maxWidth ? line[..maxWidth] : line).PadRight(maxWidth));
+            if (completed == total) writer.WriteLine();
+        }
+        else
+        {
+            writer.WriteLine($"[{bar}] {percent,3}% ({completed}/{total}) {phase}: {target}");
+        }
     }
 }
