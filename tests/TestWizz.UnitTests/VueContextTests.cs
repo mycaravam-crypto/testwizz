@@ -24,6 +24,34 @@ public sealed class VueContextTests
     }
 
     [Fact]
+    public void ExtractsVuePublicSurfaceAndMockCandidates()
+    {
+        string root = FindRepositoryRoot();
+        ContextDocument context = VueContext.Load(root, "fixtures/vue/src/components/CartItem.vue", 20_000);
+
+        Assert.Equal("vue", context.Stack);
+        Assert.Contains(context.Members, member => member.Signature.Contains("prop title: string (required: true", StringComparison.Ordinal));
+        Assert.Contains(context.Members, member => member.Signature.Contains("prop count: number (required: false, default: 0", StringComparison.Ordinal));
+        Assert.Contains(context.Members, member => member.Signature.Contains("emit select(id: number)", StringComparison.Ordinal));
+        Assert.Contains(context.Members, member => member.Signature == "exposed focus");
+        Assert.Contains(context.Members, member => member.Signature == "computed isVisible");
+        Assert.Contains(context.Members, member => member.Signature == "imports vue-router");
+        Assert.Contains(context.Members, member => member.Signature == "mockCandidates useRouter");
+        Assert.Contains(context.Members, member => member.Signature == "slots actions");
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        for (DirectoryInfo? directory = new(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "fixtures", "vue", "package.json")))
+                return directory.FullName;
+        }
+
+        throw new DirectoryNotFoundException("Could not locate the TestWizz repository root.");
+    }
+
+    [Fact]
     public void MissingSfcIsActionable()
     {
         var root = Directory.CreateTempSubdirectory("testwizz-vue-").FullName;
