@@ -2,6 +2,7 @@
   "targetSignature": "Pinia store cart",
   "members": [
     "export:useCartStore",
+    "imports:pinia",
     "store-action:addItem",
     "store-action:clear",
     "store-getter:itemCount",
