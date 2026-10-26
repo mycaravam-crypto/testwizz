@@ -56,7 +56,7 @@ public sealed class VueScenarioExtractorTests
         using var stderr = new StringWriter();
         var app = new CliApp(stdout, stderr, root, _ => null);
 
-        var exitCode = app.Run(["plan", "--for", "src/components/CartItem.vue", "--format", "json"]);
+        var exitCode = app.Run(["plan", "--for", "src/components/CartItem.vue", "--format", "json"], TestContext.Current.CancellationToken);
 
         Assert.Equal(ExitCodes.Success, exitCode);
         Assert.Empty(stderr.ToString());
