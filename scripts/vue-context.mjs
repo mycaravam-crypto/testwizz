@@ -167,12 +167,19 @@ const visit = node => {
       }
     }
     if (call === 'inject') mockCandidates.add('inject');
-    if (call === 'useRouter' || call === 'useRoute' || call === 'useI18n') mockCandidates.add(call);
-    if (call === 'fetch' || call === 'axios') mockCandidates.add(call);
+    if (call === 'useRouter' || call === 'useRoute' || call === 'useI18n' ||
+        (call.startsWith('use') && call.endsWith('Store'))) mockCandidates.add(call);
+    if (call === 'fetch' || call === 'axios' || call === 'useFetch') mockCandidates.add(call);
+    if (ts.isPropertyAccessExpression(node.expression) &&
+        ts.isIdentifier(node.expression.expression) && node.expression.expression.text === 'axios') {
+      mockCandidates.add('axios');
+    }
     if (call === 'computed' || call === 'watch' || call === 'watchEffect') {
       const declaration = node.parent;
       if (ts.isVariableDeclaration(declaration) && ts.isIdentifier(declaration.name)) {
         (call === 'computed' ? computed : watched).add(declaration.name.text);
+      } else if (call === 'watch' || call === 'watchEffect') {
+        watched.add(node.arguments[0]?.getText(ast) ?? call);
       }
     }
   }
