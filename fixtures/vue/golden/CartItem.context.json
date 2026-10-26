@@ -3,6 +3,7 @@
   "members": [
     "computed isVisible",
     "computed quantityLabel",
+    "emit call select at line 16 (payload arguments: 1)",
     "emit select(id: number)",
     "exposed focus",
     "import @/utils/cart -> src/utils/cart.ts (alias)",
@@ -16,8 +17,19 @@
     "watched () => props.count"
   ],
   "relatedTests": [
-    { "name": "CartItem.spec.ts", "file": "src/components/CartItem.spec.ts", "matchedOn": "basename" },
-    { "name": "CartItemInteractions.test.ts", "file": "src/components/CartItemInteractions.test.ts", "matchedOn": "import" }
+    {
+      "name": "CartItem.spec.ts",
+      "file": "src/components/CartItem.spec.ts",
+      "matchedOn": "basename"
+    },
+    {
+      "name": "CartItemInteractions.test.ts",
+      "file": "src/components/CartItemInteractions.test.ts",
+      "matchedOn": "import"
+    }
   ],
-  "unavailable": ["emitPaths", "coverage"]
+  "unavailable": [
+    "emitPaths",
+    "coverage"
+  ]
 }
