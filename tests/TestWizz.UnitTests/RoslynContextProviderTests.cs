@@ -87,6 +87,17 @@ public sealed class RoslynContextProviderTests : IDisposable
     }
 
     [Fact]
+    public void Discovery_ReturnsDistinctOverloadSafeProductionMethods()
+    {
+        var methods = RoslynContextProvider.Load(_fixture).DiscoverMethods();
+        Assert.Contains("M:Shop.Calculator.Divide(System.Int32,System.Int32)", methods);
+        Assert.Contains("M:Shop.Calculator.Percentage(System.Decimal,System.Int32)", methods);
+        Assert.DoesNotContain(methods, id => id.Contains("CalculatorTests", StringComparison.Ordinal));
+        Assert.Equal(methods.Count, methods.Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(methods.OrderBy(x => x, StringComparer.Ordinal), methods);
+    }
+
+    [Fact]
     public void Context_IsDeterministic()
     {
         var first = ContextJson.ToJson(Context("OrderService")).ToJsonString();
