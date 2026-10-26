@@ -90,6 +90,27 @@ public static class VueContext
                         if (value.Length > 0)
                             members = [.. members, new MemberInfo(kind + ":" + value, kind + " " + value, relative, 1)];
                     }
+
+            if (data.TryGetProperty("resolvedImports", out JsonElement resolvedImports) && resolvedImports.ValueKind == JsonValueKind.Array)
+                foreach (JsonElement item in resolvedImports.EnumerateArray())
+                {
+                    string specifier = item.GetProperty("specifier").GetString() ?? "";
+                    string kind = item.GetProperty("kind").GetString() ?? "unresolved-or-external";
+                    string resolvedPath = item.GetProperty("path").ValueKind == JsonValueKind.Null
+                        ? "unresolved"
+                        : item.GetProperty("path").GetString() ?? "unresolved";
+                    members = [.. members, new MemberInfo("import-resolution:" + specifier, $"import {specifier} -> {resolvedPath} ({kind})", relative, 1)];
+                }
+            var relatedTests = new List<RelatedTestInfo>();
+            if (data.TryGetProperty("relatedTests", out JsonElement testItems) && testItems.ValueKind == JsonValueKind.Array)
+                foreach (JsonElement item in testItems.EnumerateArray())
+                {
+                    relatedTests.Add(new RelatedTestInfo(
+                        item.GetProperty("name").GetString() ?? "",
+                        item.GetProperty("file").GetString() ?? "",
+                        item.GetProperty("line").GetInt32(),
+                        item.GetProperty("matchedOn").GetString() ?? "import"));
+                }
             string source = Encoding.UTF8.GetString(bytes);
             bool truncated = source.Length > maxChars;
             return new ContextDocument("vue", new Provenance("vue-compiler-sfc", "project", CliApp.Version),
