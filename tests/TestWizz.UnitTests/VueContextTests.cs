@@ -33,6 +33,9 @@ public sealed class VueContextTests
         Assert.Contains(context.Members, member => member.Signature.Contains("prop title: string (required: true", StringComparison.Ordinal));
         Assert.Contains(context.Members, member => member.Signature.Contains("prop count: number (required: false, default: 0", StringComparison.Ordinal));
         Assert.Contains(context.Members, member => member.Signature.Contains("emit select(id: number)", StringComparison.Ordinal));
+        Assert.Contains(context.Members, member => member.Id == "emit-call:select:16"
+            && member.Signature == "emit call select at line 16 (payload arguments: 1)"
+            && member.Line == 16);
         Assert.Contains(context.Members, member => member.Signature == "exposed focus");
         Assert.Contains(context.Members, member => member.Signature == "computed isVisible");
         Assert.Contains(context.Members, member => member.Signature == "watched () => props.count");

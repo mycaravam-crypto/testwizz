@@ -49,6 +49,7 @@ const slots = new Set();
 const propDetails = new Map();
 const propDefaults = new Map();
 const emitDetails = new Map();
+const emitCalls = [];
 const exposed = new Set();
 const computed = new Set();
 const watched = new Set();
@@ -106,6 +107,20 @@ const collectEmitType = node => {
   }
 };
 const visit = node => {
+  if (ts.isCallExpression(node)) {
+    const expression = node.expression;
+    const isEmitCall = (ts.isIdentifier(expression) && expression.text === 'emit') ||
+      (ts.isPropertyAccessExpression(expression) && expression.name.text === '$emit');
+    const event = node.arguments[0];
+    if (isEmitCall && event && (ts.isStringLiteral(event) || ts.isNoSubstitutionTemplateLiteral(event))) {
+      const scriptStartOffset = descriptor.scriptSetup?.loc.start.offset ?? descriptor.script?.loc.start.offset ?? 0;
+      emitCalls.push({
+        name: event.text,
+        line: source.slice(0, scriptStartOffset + node.getStart(ast)).split(/\n/).length,
+        payloadCount: Math.max(0, node.arguments.length - 1)
+      });
+    }
+  }
   if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
     const call = node.expression.text;
     if (call === 'withDefaults') {
@@ -386,6 +401,7 @@ relatedTests.sort((a, b) => a.file.localeCompare(b.file));
 console.log(JSON.stringify({
   propDetails: [...propDetails.values()].sort((a, b) => a.name.localeCompare(b.name)),
   emitDetails: [...emitDetails.values()].sort((a, b) => a.name.localeCompare(b.name)),
+  emitCalls: emitCalls.sort((a, b) => a.line - b.line || a.name.localeCompare(b.name)),
   exposed: [...exposed].sort(),
   computed: [...computed].sort(),
   watched: [...watched].sort(),
