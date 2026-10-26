@@ -338,6 +338,23 @@ const walkFiles = directory => {
 walkFiles(resolvedRoot);
 const targetBase = path.basename(filename, path.extname(filename));
 const testFiles = projectFiles.filter(file => /\.(?:spec|test)\.(?:ts|tsx|js|jsx|mjs|cjs)$/.test(file));
+const resolveImportFrom = (specifier, importerFile) => {
+  const aliasPath = resolveModule(specifier);
+  if (aliasPath) return aliasPath;
+  if (!specifier.startsWith('.')) return null;
+  const base = path.resolve(path.dirname(importerFile), specifier);
+  const relativeBase = path.relative(resolvedRoot, base);
+  if (relativeBase === '..' || relativeBase.startsWith('..' + path.sep) || path.isAbsolute(relativeBase)) return null;
+  const candidates = [base, ...['.ts', '.tsx', '.js', '.jsx', '.vue', '.d.ts'].map(ext => base + ext),
+    ...['index.ts', 'index.tsx', 'index.js', 'index.vue'].map(name => path.join(base, name))];
+  for (const candidate of candidates) {
+    if (!fs.existsSync(candidate)) continue;
+    try {
+      if (fs.statSync(candidate).isFile()) return path.relative(resolvedRoot, candidate).split(path.sep).join('/');
+    } catch { /* Ignore inaccessible candidates. */ }
+  }
+  return null;
+};
 const relatedTests = [];
 for (const testFile of testFiles) {
   const relativeTest = path.relative(resolvedRoot, testFile).split(path.sep).join('/');
@@ -349,14 +366,18 @@ for (const testFile of testFiles) {
   if (baseName.startsWith(targetBase + '.')) {
     matchedOn = 'basename';
   } else {
-    const candidates = [relative, ...resolvedImports.filter(item => item.path).map(item => item.path)];
-    const match = candidates.find(candidate => testSource.includes(candidate) ||
-      testSource.includes(candidate.replace(/\.(?:vue|tsx?|jsx?)$/, '')));
-    if (match) {
-      matchedOn = 'import';
-      const offset = testSource.indexOf(match);
-      line = testSource.slice(0, offset).split('\n').length;
-    }
+    const scriptKind = /\.tsx$/.test(testFile) ? ts.ScriptKind.TSX
+      : /\.jsx$/.test(testFile) ? ts.ScriptKind.JSX : ts.ScriptKind.TS;
+    const testAst = ts.createSourceFile(testFile, testSource, ts.ScriptTarget.Latest, true, scriptKind);
+    const visitTestImports = node => {
+      if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) &&
+          resolveImportFrom(node.moduleSpecifier.text, testFile) === relative) {
+        matchedOn = 'import';
+        line = testAst.getLineAndCharacterOfPosition(node.getStart(testAst)).line + 1;
+      }
+      ts.forEachChild(node, visitTestImports);
+    };
+    visitTestImports(testAst);
   }
   if (matchedOn) relatedTests.push({ name: baseName, file: relativeTest, line, matchedOn });
 }
