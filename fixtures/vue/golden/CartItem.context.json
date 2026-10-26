@@ -14,6 +14,7 @@
     "prop count: number (required: false, default: 0, validator: none)",
     "prop title: string (required: true, default: none, validator: none)",
     "slots actions",
+    "template event click at line 25 (handler: emit('select', count))",
     "watched () => props.count"
   ],
   "relatedTests": [
