@@ -11,7 +11,7 @@ public static class VueTypeScriptContext
 {
     public static ContextDocument Load(string root, string target, int maxChars)
     {
-        string relative = target.Replace('\\\\', '/');
+        string relative = target.Replace('\\', '/');
         if (Path.IsPathRooted(relative) || relative.Split('/').Any(part => part is "." or ".." or "")
             || !relative.EndsWith(".ts", StringComparison.OrdinalIgnoreCase)
             || !relative.Split('/').Any(part => part is "composables" or "stores"))
@@ -24,7 +24,7 @@ public static class VueTypeScriptContext
                 { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint })
                 .Where(path => path.Split(Path.DirectorySeparatorChar).Any(segment => segment is "composables" or "stores")
                     && !path.Split(Path.DirectorySeparatorChar).Any(segment => segment is "node_modules" or "dist" or "build" or ".git"))
-                .Select(path => Path.GetRelativePath(root, path).Replace('\\\\', '/'))
+                .Select(path => Path.GetRelativePath(root, path).Replace('\\', '/'))
                 .OrderBy(path => path, StringComparer.Ordinal).Take(20).ToArray();
             throw new ContextException("target.not_found", $"Vue composable/store not found: {relative}.", candidates);
         }
