@@ -61,6 +61,8 @@ public static class BootstrapCommand
                 var generationResponse = JsonNode.Parse(generated.ToString())!;
                 proposal = (string?)generationResponse["result"]?["path"];
                 generation = generationExit == ExitCodes.Success ? "ok" : "failed";
+                if (generationExit == ExitCodes.Success && proposal is null)
+                    throw new CliException("bootstrap.no_proposal", "Generation succeeded without a proposal path.");
                 if (generationExit == ExitCodes.Success && proposal is not null && !context.Has("--generate-only"))
                 {
                     ReportProgress(context, i, targets.Count, target, "running");
@@ -75,7 +77,7 @@ public static class BootstrapCommand
                     execution = runExit == ExitCodes.Success ? "passed" : "failed";
                 }
                 else if (generationExit != ExitCodes.Success)
-                    execution = "skipped";
+                    execution = "not-run";
             }
             catch (Exception ex) when (ex is CliException or InvalidOperationException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException)
             {
@@ -85,7 +87,7 @@ public static class BootstrapCommand
             }
 
             if (generation == "ok" && (execution is "passed" or "not-run")) succeeded++;
-            else if (execution == "skipped") skipped++;
+            else if (generation == "ok" && execution == "skipped") skipped++;
             else failed++;
 
             rows.Add(new JsonObject
