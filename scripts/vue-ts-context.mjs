@@ -31,8 +31,10 @@ if (ast.parseDiagnostics.length) {
 }
 const textOf = node => node?.getText(ast) ?? '';
 const lineOf = node => ast.getLineAndCharacterOfPosition(node.getStart(ast)).line + 1;
-const nameOf = node => node?.name && (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name))
-  ? node.name.text : '';
+const nameOf = node => {
+  const value = node && (ts.isIdentifier(node) || ts.isStringLiteral(node)) ? node : node?.name;
+  return value && (ts.isIdentifier(value) || ts.isStringLiteral(value)) ? value.text : '';
+};
 const members = [];
 const imports = [];
 const dependencies = new Set();
