@@ -35,6 +35,7 @@ public sealed class VueContextTests
         Assert.Contains(context.Members, member => member.Signature.Contains("emit select(id: number)", StringComparison.Ordinal));
         Assert.Contains(context.Members, member => member.Signature == "exposed focus");
         Assert.Contains(context.Members, member => member.Signature == "computed isVisible");
+        Assert.Contains(context.Members, member => member.Signature == "watched () => props.count");
         Assert.Contains(context.Members, member => member.Signature == "imports vue-router");
         Assert.Contains(context.Members, member => member.Signature == "mockCandidates useRouter");
         Assert.Contains(context.Members, member => member.Signature == "slots actions");
