@@ -82,6 +82,14 @@ public static class VueContext
                     string payload = item.GetProperty("payload").GetString() ?? "";
                     members = [.. members, new MemberInfo("emit-detail:" + emitName, $"emit {emitName}({payload})", relative, 1)];
                 }
+            if (data.TryGetProperty("emitCalls", out JsonElement emitCalls) && emitCalls.ValueKind == JsonValueKind.Array)
+                foreach (JsonElement item in emitCalls.EnumerateArray())
+                {
+                    string emitName = item.GetProperty("name").GetString() ?? "";
+                    int line = item.GetProperty("line").GetInt32();
+                    int payloadCount = item.GetProperty("payloadCount").GetInt32();
+                    members = [.. members, new MemberInfo($"emit-call:{emitName}:{line}", $"emit call {emitName} at line {line} (payload arguments: {payloadCount})", relative, line)];
+                }
             foreach (string kind in new[] { "exposed", "computed", "watched", "imports", "mockCandidates" })
                 if (data.TryGetProperty(kind, out JsonElement values) && values.ValueKind == JsonValueKind.Array)
                     foreach (JsonElement item in values.EnumerateArray())
@@ -118,7 +126,7 @@ public static class VueContext
                 new SourceInfo(relative, 1, source.Split('\n').Length, Convert.ToHexStringLower(SHA256.HashData(bytes)),
                     truncated ? source[..maxChars] : source, truncated, null), null,
                 members, [], [], [], relatedTests,
-                [new("emitPaths", "Emit call sites and payload types are not yet mapped to source locations."),
+                [new("emitPaths", "Template event paths and static payload types are not fully mapped; script-level emit call sites include source lines and payload argument counts."),
                  new("coverage", "No coverage measurement available.")], []);
         }
         catch (System.ComponentModel.Win32Exception)
