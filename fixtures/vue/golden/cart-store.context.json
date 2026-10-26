@@ -1,0 +1,14 @@
+{
+  "targetSignature": "Pinia store cart",
+  "members": [
+    "export:useCartStore",
+    "store-action:addItem",
+    "store-action:clear",
+    "store-getter:itemCount",
+    "store-state:items",
+    "store-state:loading",
+    "store:cart"
+  ],
+  "relatedTests": [],
+  "unavailable": ["coverage", "runtimeBehavior"]
+}
