@@ -35,7 +35,7 @@ public static class ConfigCommand
     /// <summary>Loads and validates a config file, turning every problem into a <see cref="CliException"/>.</summary>
     public static TestWizzConfig Load(string file)
     {
-        if (!File.Exists(file) && Path.GetFileName(file) == TestWizzConfig.FileName)
+        if (Path.GetFileName(file) == TestWizzConfig.FileName)
             file = Resolve(Path.GetDirectoryName(file)!);
         if (!File.Exists(file))
         {
