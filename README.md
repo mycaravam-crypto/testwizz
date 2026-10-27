@@ -61,6 +61,8 @@ The initial implementation discovers public/internal/protected-internal C# metho
 - `ai.provider`: `ollama` or `openai-compatible` (LM Studio, llama.cpp server, vLLM, ...).
 - `ai.endpoint`: for Ollama the server root (`http://127.0.0.1:11434`); for OpenAI-compatible servers the base URL including the version, e.g. `http://127.0.0.1:1234/v1`.
 - `ai.apiKeyEnv`: the *name* of an environment variable holding the key, never the key itself. `.env` files are not loaded.
+  - For ordinary local Ollama, leave it `null` (no key required). For an authenticated local server, set it to e.g. `"TESTWIZZ_AI_API_KEY"`, then run `read -rsp 'Local AI API key: ' TESTWIZZ_AI_API_KEY; echo; export TESTWIZZ_AI_API_KEY` in Bash before `testwizz ai check .`.
+  - See [Local AI providers and API keys](docs/ai-providers.md) for both configurations and security guidance.
 - `run.runtime`: `docker` or `podman`. Generated tests only ever run inside a container.
 - `output`: where proposals are written, relative to the config file. It defaults to a directory outside the repository.
 
