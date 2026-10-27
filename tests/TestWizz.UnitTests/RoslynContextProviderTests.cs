@@ -97,8 +97,8 @@ public sealed class RoslynContextProviderTests : IDisposable
     {
         var provider = RoslynContextProvider.Load(_fixture, TestContext.Current.CancellationToken);
         var reports = new List<(int Done, int Total)>();
-        var found = provider.DiscoverMethods(TestContext.Current.CancellationToken,
-            (done, total) => reports.Add((done, total)));
+        var found = provider.DiscoverMethods((done, total) => reports.Add((done, total)),
+            TestContext.Current.CancellationToken);
 
         Assert.Equal(provider.DiscoverMethods(TestContext.Current.CancellationToken), found);
         Assert.NotEmpty(reports);
