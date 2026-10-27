@@ -11,6 +11,7 @@ public sealed class CliAppTests : IDisposable
     public void Dispose() => Directory.Delete(_directory, recursive: true);
 
     private string ConfigPath => Path.Combine(_directory, TestWizzConfig.FileName);
+    private string YamlPath => Path.Combine(_directory, "testwizz.yaml");
 
     private (int ExitCode, string Stdout, string Stderr) Run(params string[] args)
     {
@@ -166,9 +167,9 @@ public sealed class CliAppTests : IDisposable
         Assert.Equal(ExitCodes.Success, exit);
         Assert.Empty(stderr);
         var result = ParseJson(stdout)["result"]!;
-        Assert.Equal(ConfigPath, (string)result["path"]!);
+        Assert.Equal(YamlPath, (string)result["path"]!);
         Assert.False((bool)result["overwritten"]!);
-        Assert.Equal(TestWizzConfig.Default, ConfigJson.Parse(File.ReadAllText(ConfigPath)).Config);
+        Assert.Equal(TestWizzConfig.Default, ConfigJson.Parse(TestWizzYaml.ToJson(File.ReadAllText(YamlPath))).Config);
     }
 
     [Fact]
@@ -192,7 +193,7 @@ public sealed class CliAppTests : IDisposable
         var (exit, _, _) = Run("init", "--force");
 
         Assert.Equal(ExitCodes.Success, exit);
-        Assert.True(ConfigJson.Parse(File.ReadAllText(ConfigPath)).IsValid);
+        Assert.True(ConfigJson.Parse(TestWizzYaml.ToJson(File.ReadAllText(YamlPath))).IsValid);
     }
 
     [Fact]
@@ -202,6 +203,29 @@ public sealed class CliAppTests : IDisposable
 
         Assert.Equal(ExitCodes.Error, exit);
         Assert.Contains("Directory not found", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Config_PrefersYamlOverLegacyJson()
+    {
+        File.WriteAllText(ConfigPath, """{ "version": 1, "ai": { "model": "legacy" } }""");
+        File.WriteAllText(YamlPath, """
+            version: 1
+            ai:
+              model: preferred
+            """);
+        var (exit, stdout, _) = Run("config", "--format", "json");
+        Assert.Equal(ExitCodes.Success, exit);
+        Assert.Equal("preferred", (string)ParseJson(stdout)["result"]!["config"]!["ai"]!["model"]!);
+    }
+
+    [Fact]
+    public void Config_StillAcceptsLegacyJson()
+    {
+        File.WriteAllText(ConfigPath, """{ "version": 1, "ai": { "model": "legacy" } }""");
+        var (exit, stdout, _) = Run("config", "--format", "json");
+        Assert.Equal(ExitCodes.Success, exit);
+        Assert.Equal("legacy", (string)ParseJson(stdout)["result"]!["config"]!["ai"]!["model"]!);
     }
 
     [Fact]
