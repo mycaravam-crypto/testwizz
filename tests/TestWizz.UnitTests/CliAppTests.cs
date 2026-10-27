@@ -24,6 +24,22 @@ public sealed class CliAppTests : IDisposable
     private static JsonObject ParseJson(string stdout) => JsonNode.Parse(stdout)!.AsObject();
 
     [Fact]
+    public void Bootstrap_PreCancelledToken_ReturnsStructuredErrorWithoutStackTrace()
+    {
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        var exit = new CliApp(stdout, stderr, _directory).Run(
+            ["bootstrap", "--all", "--generate-only", "--format", "json"], cancellation.Token);
+
+        Assert.Equal(ExitCodes.Error, exit);
+        Assert.Equal("cancelled", (string)ParseJson(stdout.ToString())["error"]!["code"]!);
+        Assert.DoesNotContain("Unhandled exception", stderr.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Bootstrap_RequiresExplicitAllFlag()
     {
         var (exit, stdout, _) = Run("bootstrap", "--format", "json");
