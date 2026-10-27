@@ -38,8 +38,26 @@ The initial implementation discovers public/internal/protected-internal C# metho
 
 ## Configuration
 
-`testwizz init` writes:
+`testwizz init` writes `testwizz.yaml` (the legacy `testwizz.json` is still supported). Equivalent YAML configuration:
 
+```yaml
+version: 1
+ai:
+  provider: ollama
+  endpoint: http://127.0.0.1:11434
+  model: qwen2.5-coder:14b
+  apiKeyEnv: null
+  timeoutSeconds: 120
+  maxContextTokens: 16000
+run:
+  runtime: docker
+  maxRepairAttempts: 2
+output: ../.testwizz-proposals
+```
+
+Previously generated `testwizz.json` files remain valid without conversion. If both files exist, `testwizz.yaml` takes precedence. New repositories should use the common `<tool>.yaml` naming pattern alongside `gitwizz.yaml` and `docwizz.yaml`.
+
+<!-- Legacy JSON example retained for reference -->
 ```json
 {
   "version": 1,
