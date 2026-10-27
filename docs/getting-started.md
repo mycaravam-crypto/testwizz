@@ -48,7 +48,16 @@ tw --version
 
 If you have not created the Bash alias, run `testwizz --version` instead. Global .NET tools normally live under `$HOME/.dotnet/tools` on Linux/macOS. Set `alias tw='testwizz'` in `~/.bashrc` if desired.
 
-The CLI package version is derived from Git: at a `vX.Y.Z` tag it is `X.Y.Z`; after that tag it is the **next patch** prerelease (for example `0.2.4-dev.3` three commits after `v0.2.3`). Without a matching tag it uses `0.1.1-dev.<commit-count>`. You need Git history locally (avoid shallow clones). An explicit version can be supplied with `dotnet pack ... -p:Version=1.2.3` for a controlled release.
+The CLI package version is derived from Git (the pack step validates this in CI): at a `vX.Y.Z` tag it is `X.Y.Z`; after that tag it is the **next patch** prerelease (for example `0.2.4-dev.3` three commits after `v0.2.3`). Without a matching tag it uses `0.1.1-dev.<commit-count>`. You need Git history locally (avoid shallow clones). An explicit version can be supplied with `dotnet pack ... -p:Version=1.2.3` for a controlled release.
+
+**If you previously installed an artificial version such as `0.99.0-local.1`, that version is higher than the normal project version. Uninstall that one-time override before switching back to Git-derived packages:**
+
+```bash
+dotnet tool uninstall --global TestWizz
+dotnet tool install --global TestWizz --add-source ./artifacts
+```
+
+Release policy matches DocWizz and GitWizz: merged PRs create SemVer releases using `release:major`, `release:minor`, `release:patch` (default), or `release:none`. A release workflow verifies tests, creates an immutable `vX.Y.Z` tag and attaches the .NET tool package to a GitHub Release.
 
 If the installed package has the same or a higher version, `dotnet tool update` may not replace it. To force a local reinstall:
 
