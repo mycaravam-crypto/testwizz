@@ -49,12 +49,12 @@ public static class BootstrapCommand
         var includedProjects = DocWizzProjectScope.Read(root);
         var discoveryClock = Stopwatch.StartNew();
         var lastDiscoveryReport = TimeSpan.Zero;
-        var targets = provider.DiscoverMethods(context.CancellationToken, (done, total) =>
+        var targets = provider.DiscoverMethods((done, total) =>
             {
                 if (discoveryClock.Elapsed - lastDiscoveryReport < TimeSpan.FromSeconds(2) && done != total) return;
                 lastDiscoveryReport = discoveryClock.Elapsed;
                 context.Output.Stderr.WriteLine($"testwizz bootstrap: discovering methods: {done}/{total} source files ({discoveryClock.Elapsed.TotalSeconds:F1}s)");
-            })
+            }, context.CancellationToken)
             .Where(target => includedProjects is null
                 || (provider.GetContext(target, CliApp.Version).Project is { } project
                     && includedProjects.Contains(project.Replace('\\', '/'))))
