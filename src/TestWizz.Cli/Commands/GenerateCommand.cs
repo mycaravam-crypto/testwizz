@@ -55,7 +55,7 @@ public static class GenerateCommand
         if (context.Has(SinceOption))
         {
             var since = context.Options[SinceOption];
-            List<ChangedMethod> ranked;
+            List<ChangedCode.RankedMethod> ranked;
             List<string> targets;
             try
             {
@@ -184,7 +184,7 @@ public static class GenerateCommand
         return result.IsValid ? ExitCodes.Success : ExitCodes.ValidationFailed;
     }
 
-    private static int RunBatch(CommandContext context, List<ChangedMethod> ranked, string since, int minRisk)
+    private static int RunBatch(CommandContext context, List<ChangedCode.RankedMethod> ranked, string since, int minRisk)
     {
         var targets = ranked.Select(m => m.Target).ToList();
         var riskByTarget = ranked.ToDictionary(m => m.Target, m => m.Risk, StringComparer.Ordinal);
