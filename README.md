@@ -29,11 +29,12 @@ Exit codes: `0` success, `1` validation failed, `2` usage, configuration or runt
 testwizz bootstrap . --all --review              # discover, generate and run eligible C# methods
 testwizz bootstrap . --all --generate-only      # generate proposals without containers
 testwizz bootstrap . --all --format json        # one aggregate JSON object on stdout
+testwizz bootstrap . --all --resume             # resume an interrupted scan
 ```
 
 The initial implementation discovers public/internal/protected-internal C# methods with bodies, using overload-safe documentation IDs; tests and ignored files are excluded. It processes all eligible targets sequentially, writes progress to stderr, and records per-target generation and run outcomes. Proposal files stay **outside** the repository and are **not applied automatically**. Generation requires a configured local model; running requires Docker/Podman.
 
-**Current limitations:** C# / xUnit only; no Vue generation, persistent resume/checkpoints, or automatic application. The number of eligible methods is not a guarantee of comprehensive test coverage; inferred expectations still require review.
+**Current limitations:** C# / xUnit only; no Vue generation, mid-request AI state recovery, or automatic application. The number of eligible methods is not a guarantee of comprehensive test coverage; inferred expectations still require review.
 
 ## Configuration
 
