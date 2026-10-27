@@ -46,7 +46,7 @@ public sealed class RepairLoop(DotNetTestRunner runner, Func<ModelClient>? clien
                 RoslynContextProvider provider;
                 try
                 {
-                    provider = RoslynContextProvider.Load(root);
+                    provider = RoslynContextProvider.Load(root, cancellationToken);
                     context = provider.GetContext((string)proposal.Manifest["target"]!["id"]!, (string?)proposal.Manifest["toolVersion"] ?? "unknown");
                 }
                 catch (ContextException ex)
