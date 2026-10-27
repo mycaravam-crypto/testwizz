@@ -66,7 +66,7 @@ public sealed class RoslynContextProvider
             var tree = CSharpSyntaxTree.ParseText(
                 Encoding.UTF8.GetString(bytes),
                 new CSharpParseOptions(LanguageVersion.Preview),
-                path: relative);
+                path: relative, cancellationToken: cancellationToken);
             files.Add(new SourceFile(relative, tree, Convert.ToHexStringLower(SHA256.HashData(bytes)), IsTestFile(tree)));
         }
 
@@ -101,7 +101,7 @@ public sealed class RoslynContextProvider
     private ISymbol? DeclaredSymbol(Match candidate, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return _compilation.GetSemanticModel(candidate.File.Tree).GetDeclaredSymbol(candidate.Node);
+        return _compilation.GetSemanticModel(candidate.File.Tree).GetDeclaredSymbol(candidate.Node, cancellationToken);
     }
 
     /// <summary>Full path of the repository root the provider was loaded from.</summary>
