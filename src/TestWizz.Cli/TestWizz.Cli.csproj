@@ -8,7 +8,7 @@
     <Description>Generate reviewable unit tests for .NET and Vue applications with a local AI model.</Description>
   </PropertyGroup>
 
-  <Target Name="TestWizzGitVersion" BeforeTargets="GetAssemblyVersion;GenerateNuspec"
+  <Target Name="TestWizzGitVersion" BeforeTargets="GenerateAssemblyInfo;GenerateNuspec;GetPackageContents;_GetPackageFiles;GetAssemblyVersion"
           Condition="'$(Version)' == '0.1.0' and '$(TestWizzDisableGitVersion)' != 'true'">
     <Exec Command="git describe --tags --long --match &quot;v[0-9]*.[0-9]*.[0-9]*&quot;" WorkingDirectory="$(MSBuildProjectDirectory)"
           ConsoleToMSBuild="true" IgnoreExitCode="true" EchoOff="true" StandardOutputImportance="low">
@@ -29,6 +29,7 @@
       <Version Condition="'$(_TwTag)' != '' and '$(_TwHeight)' != '0'">$(_TwMinor).$([MSBuild]::Add($(_TwPatch), 1))-dev.$(_TwHeight)</Version>
       <Version Condition="'$(_TwTag)' == '' and '$(_TwCountExit)' == '0' and '$(_TwCount)' != ''">0.1.1-dev.$(_TwCount)</Version>
       <PackageVersion>$(Version)</PackageVersion>
+      <InformationalVersion>$(Version)</InformationalVersion>
     </PropertyGroup>
   </Target>
 

@@ -31,4 +31,18 @@ jobs:
         env:
           # The hosted runner has Docker; this enables the real-container tests for `testwizz run`.
           TESTWIZZ_DOCKER_TESTS: 1
+      - run: bash .github/scripts/semver-next.test.sh
       - run: dotnet pack src/TestWizz.Cli --no-build -c Release -o artifacts
+      - name: Verify Git-derived package version
+        run: |
+          ls -la artifacts/*.nupkg
+          if git describe --tags --exact-match --match 'v[0-9]*.[0-9]*.[0-9]*' HEAD >/dev/null 2>&1; then
+            echo 'Tagged build: release version expected'
+          else
+            if find artifacts -name 'TestWizz.*-dev.*.nupkg' | grep -q .; then
+              echo 'Git-derived dev package detected'
+            else
+              echo 'Expected Git-derived dev version for untagged checkout' >&2
+              exit 1
+            fi
+          fi
