@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Diagnostics;
 using System.Text.Json.Nodes;
 using System.Text;
 using TestWizz.AI;
@@ -20,6 +21,7 @@ public static class GenerateCommand
     private const string AllChangedOption = "--all-changed";
     private const string MinRiskOption = "--min-risk";
     private const string DebugOption = "--debug";
+    private const string MaxWorkersOption = "--max-workers";
     private const int MaxBatchTargets = 20;
 
     public static CommandDefinition Definition { get; } = new(
@@ -36,6 +38,7 @@ public static class GenerateCommand
             new(AllChangedOption, "Generate proposals for up to 20 changed C# methods and produce one CI summary."),
             new(MinRiskOption, "Minimum deterministic method-risk score (0-100).", "score"),
             new(DebugOption, "Print each generated test source to stderr (may contain sensitive source code)."),
+            new(MaxWorkersOption, "Maximum adaptive LLM workers for --all-changed (1-8; default 4).", "n"),
         ],
         MaxArguments: 1,
         Handler: Run);
@@ -187,68 +190,112 @@ public static class GenerateCommand
         return result.IsValid ? ExitCodes.Success : ExitCodes.ValidationFailed;
     }
 
+    private sealed record BatchItem(string Target, string Status, string? Proposal, string? ErrorCode, string DebugText, double Seconds);
+
     private static int RunBatch(CommandContext context, List<ChangedCode.RankedMethod> ranked, string since, int minRisk)
     {
-        var targets = ranked.Select(m => m.Target).ToList();
-        var riskByTarget = ranked.ToDictionary(m => m.Target, m => m.Risk, StringComparer.Ordinal);
-        if (targets.Count > MaxBatchTargets)
-            throw new CliException("target.too_many", $"Changed methods: {targets.Count}; maximum is {MaxBatchTargets}. Narrow the Git comparison.");
-        var rows = new JsonArray();
-        var markdown = new StringBuilder("# TestWizz changed-code generation\n\n");
-        markdown.Append("| Target | Status | Proposal |\n|---|---|---|\n");
-        var failed = 0;
-        foreach (var target in targets)
+        if (ranked.Count > MaxBatchTargets)
+            throw new CliException("target.too_many", $"Changed methods: {ranked.Count}; maximum is {MaxBatchTargets}. Narrow the Git comparison.");
+        var limit = 4;
+        if (context.Options.TryGetValue(MaxWorkersOption, out var text)
+            && (!int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out limit) || limit is < 1 or > 8))
+            throw new CliException("usage", "--max-workers must be between 1 and 8.");
+        var root = context.PathArgument();
+        var config = ConfigCommand.Load(Path.Combine(root, TestWizzConfig.FileName));
+        using var model = ModelClient.Create(config.Ai, context.GetEnvironmentVariable);
+        var provider = RoslynContextProvider.Load(root);
+        var results = new BatchItem[ranked.Count];
+        var workers = 1;
+        double priorThroughput = 0;
+        var position = 0;
+        while (position < ranked.Count)
         {
             context.CancellationToken.ThrowIfCancellationRequested();
-            using var stdout = new StringWriter(CultureInfo.InvariantCulture);
-            var options = context.Options
-                .Where(option => option.Key is not (AllChangedOption or SinceOption))
-                .ToDictionary(option => option.Key, option => option.Value, StringComparer.Ordinal);
-            options["--for"] = target;
-            var inner = context with
+            var count = Math.Min(workers, ranked.Count - position);
+            var start = position;
+            var stopwatch = Stopwatch.StartNew();
+            // Execute independent LLM requests concurrently, but share the read-only Roslyn compilation.
+            // Each worker keeps console output private until its complete result has been collected.
+            var tasks = Enumerable.Range(start, count).Select(index => Task.Run(() =>
             {
-                Options = options,
-                Output = new CliOutput(stdout, context.Output.Stderr, OutputFormat.Json),
-            };
-            string status;
-            string? proposalPath = null;
-            string? errorCode = null;
-            try
+                var target = ranked[index].Target;
+                using var stdout = new StringWriter(CultureInfo.InvariantCulture);
+                using var stderr = new StringWriter(CultureInfo.InvariantCulture);
+                var options = context.Options
+                    .Where(option => option.Key is not (AllChangedOption or SinceOption or MaxWorkersOption))
+                    .ToDictionary(option => option.Key, option => option.Value, StringComparer.Ordinal);
+                options["--for"] = target;
+                var inner = context with
+                {
+                    Options = options,
+                    Output = new CliOutput(stdout, stderr, OutputFormat.Json),
+                    SharedProvider = provider,
+                    SharedModel = model,
+                };
+                var timer = Stopwatch.StartNew();
+                try
+                {
+                    var exit = Run(inner);
+                    var response = JsonNode.Parse(stdout.ToString())!;
+                    return new BatchItem(target, exit == ExitCodes.Success ? "ok" : "failed",
+                        (string?)response["result"]?["path"], null, stderr.ToString(), timer.Elapsed.TotalSeconds);
+                }
+                catch (CliException ex)
+                {
+                    return new BatchItem(target, "error", null, ex.Code, stderr.ToString(), timer.Elapsed.TotalSeconds);
+                }
+            }, context.CancellationToken)).ToArray();
+            Task.WhenAll(tasks).GetAwaiter().GetResult();
+            stopwatch.Stop();
+            for (var i = 0; i < tasks.Length; i++)
             {
-                var exitCode = Run(inner);
-                var response = JsonNode.Parse(stdout.ToString())!;
-                proposalPath = (string?)response["result"]?["path"];
-                status = exitCode == ExitCodes.Success ? "ok" : "failed";
-                if (exitCode != ExitCodes.Success) failed++;
+                var item = tasks[i].Result;
+                results[start + i] = item;
+                if (item.DebugText.Length > 0)
+                    context.Output.Stderr.Write(item.DebugText);
+                context.Output.Stderr.WriteLine($"testwizz batch: {start + i + 1}/{ranked.Count} {item.Target}: {item.Status} ({item.Seconds:F1}s)");
             }
-            catch (CliException ex)
-            {
-                status = "error";
-                errorCode = ex.Code;
-                failed++;
-            }
-
+            position += count;
+            var throughput = count / Math.Max(0.001, stopwatch.Elapsed.TotalSeconds);
+            context.Output.Stderr.WriteLine($"testwizz batch: workers={workers}, throughput={throughput:F3} targets/s");
+            // Additive ramp-up with regression backoff: do not increase concurrency when
+            // throughput is below 90% of the preceding wave. No assumption about GPU size.
+            if (workers > 1 && priorThroughput > 0 && throughput < priorThroughput * 0.9)
+                workers = Math.Max(1, workers - 1);
+            else if (workers < limit && position < ranked.Count)
+                workers++;
+            priorThroughput = throughput;
+        }
+        var rows = new JsonArray();
+        var markdown = new StringBuilder("# TestWizz changed-code generation\n\n| Target | Status | Proposal |\n|---|---|---|\n");
+        var failed = 0;
+        for (var i = 0; i < results.Length; i++)
+        {
+            var item = results[i];
+            if (item.Status != "ok") failed++;
             rows.Add(new JsonObject
             {
-                ["target"] = target,
-                ["risk"] = riskByTarget[target],
-                ["status"] = status,
-                ["proposal"] = proposalPath,
-                ["errorCode"] = errorCode,
+                ["target"] = item.Target,
+                ["risk"] = ranked[i].Risk,
+                ["status"] = item.Status,
+                ["proposal"] = item.Proposal,
+                ["errorCode"] = item.ErrorCode,
+                ["seconds"] = item.Seconds,
             });
-            markdown.Append("| `").Append(target.Replace("|", "\\|", StringComparison.Ordinal))
-                .Append("` | ").Append(status).Append(" | ")
-                .Append(proposalPath is null ? "—" : "`" + proposalPath.Replace("|", "\\|", StringComparison.Ordinal) + "`")
+            markdown.Append("| `").Append(item.Target.Replace("|", "\\|", StringComparison.Ordinal))
+                .Append("` | ").Append(item.Status).Append(" | ")
+                .Append(item.Proposal is null ? "—" : "`" + item.Proposal.Replace("|", "\\|", StringComparison.Ordinal) + "`")
                 .Append(" |\n");
         }
-        markdown.Append(CultureInfo.InvariantCulture, $"\n{targets.Count} target(s), {failed} failed. No repository files were modified.\n");
+        markdown.Append(CultureInfo.InvariantCulture, $"\n{results.Length} target(s), {failed} failed. No repository files were modified.\n");
         context.Output.Result("generate", new JsonObject
         {
             ["schema"] = "testwizz.generate-batch/v1",
             ["base"] = since,
-            ["total"] = targets.Count,
+            ["total"] = results.Length,
             ["failed"] = failed,
             ["minRisk"] = minRisk,
+            ["maxWorkers"] = limit,
             ["items"] = rows,
         }, markdown.ToString(), failed > 0 ? "failed" : "ok");
         return failed > 0 ? ExitCodes.ValidationFailed : ExitCodes.Success;
