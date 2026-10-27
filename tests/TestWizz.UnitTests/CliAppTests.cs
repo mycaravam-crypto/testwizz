@@ -169,7 +169,7 @@ public sealed class CliAppTests : IDisposable
         var result = ParseJson(stdout)["result"]!;
         Assert.Equal(YamlPath, (string)result["path"]!);
         Assert.False((bool)result["overwritten"]!);
-        Assert.Equal(TestWizzConfig.Default, ConfigJson.Parse(TestWizzYaml.ToJson(File.ReadAllText(YamlPath))).Config);
+        Assert.Equal(TestWizzConfig.Default, ConfigJson.Parse(TestWizz.Cli.Commands.TestWizzYaml.ToJson(File.ReadAllText(YamlPath))).Config);
     }
 
     [Fact]
@@ -193,7 +193,7 @@ public sealed class CliAppTests : IDisposable
         var (exit, _, _) = Run("init", "--force");
 
         Assert.Equal(ExitCodes.Success, exit);
-        Assert.True(ConfigJson.Parse(TestWizzYaml.ToJson(File.ReadAllText(YamlPath))).IsValid);
+        Assert.True(ConfigJson.Parse(TestWizz.Cli.Commands.TestWizzYaml.ToJson(File.ReadAllText(YamlPath))).IsValid);
     }
 
     [Fact]
