@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using TestWizz.Core.Configuration;
 using TestWizz.Core.Proposals;
 using TestWizz.DotNet;
+using TestWizz.AI;
 
 namespace TestWizz.Cli.Commands;
 
@@ -42,6 +43,7 @@ public static class BootstrapCommand
                     && includedProjects.Contains(project.Replace('\\', '/'))))
             .ToArray();
         var config = ConfigCommand.Load(Path.Combine(root, TestWizzConfig.FileName));
+        using var model = ModelClient.Create(config.Ai, context.GetEnvironmentVariable);
         var outputDirectory = context.Options.TryGetValue("--out", out var custom) && !string.IsNullOrWhiteSpace(custom)
             ? Path.GetFullPath(custom, context.WorkingDirectory)
             : Path.GetFullPath(config.Output, root);
@@ -97,6 +99,8 @@ public static class BootstrapCommand
                     Command = GenerateCommand.Definition,
                     Options = options,
                     Output = new CliOutput(generated, context.Output.Stderr, OutputFormat.Json),
+                    SharedProvider = provider,
+                    SharedModel = model,
                 };
                 var generationExit = GenerateCommand.Definition.Handler(generateContext);
                 var generationResponse = JsonNode.Parse(generated.ToString())!;
