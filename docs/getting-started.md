@@ -70,6 +70,6 @@ scope:
       - src/Billing/Billing.csproj
 ```
 
-Without `docwizz.yaml` or without a `scope` block, TestWizz retains its normal repository-wide method discovery. An invalid or empty configured project list fails rather than silently scanning everything. Non-.NET projects listed in the include array are currently not supported by this C#-only bootstrap integration. The project scope is part of the resume fingerprint: changing the project selection requires starting a fresh scan without `--resume`.
+Without `docwizz.yaml` or without a `scope` block, TestWizz retains its normal repository-wide method discovery. An invalid or empty configured project list fails rather than silently scanning everything. Other valid project manifests (such as `package.json`, `.fsproj`, and `.vbproj`) can appear in the include array but do not produce C# targets in the current bootstrap command. The project scope is part of the resume fingerprint: changing the project selection requires starting a fresh scan without `--resume`.
 
 This is a **project selection filter**. DocWizz's additional `references`, `test_links`, and `unassigned_sources` policies are not interpreted by TestWizz.
