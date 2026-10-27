@@ -228,8 +228,7 @@ if (descriptor.template) {
         // Only static event names are mapped; dynamic arguments need a separate,
         // explicitly reviewable representation rather than a guessed event name.
         if (prop.type === 7 && prop.name === 'on' && prop.arg?.type === 4 && prop.arg.isStatic) {
-          const templateStartOffset = descriptor.template.loc.start.offset;
-          const absoluteOffset = templateStartOffset + prop.loc.start.offset;
+          const absoluteOffset = prop.loc.start.offset;
           templateEvents.push({
             name: prop.arg.content,
             line: source.slice(0, absoluteOffset).split(/\n/).length,
