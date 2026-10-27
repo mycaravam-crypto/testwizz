@@ -154,7 +154,7 @@ public static class BootstrapCommand
         text.Append("| `").Append(target.Replace("|", "\\|", StringComparison.Ordinal))
             .Append("` | ").Append(generation).Append(" | ").Append(execution).Append(" | ")
             .Append(proposal is null ? "—" : "`" + proposal.Replace("|", "\\|", StringComparison.Ordinal) + "`")
-            .Append("|\\n");
+            .Append("|\n");
     }
 
     private static string Fingerprint(string root, TestWizzConfig config, IReadOnlyList<string> targets, bool generateOnly)
@@ -165,7 +165,7 @@ public static class BootstrapCommand
                 part is ".git" or "bin" or "obj" or "node_modules"))
             .Order(StringComparer.Ordinal);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        void Add(string value) => hash.AppendData(Encoding.UTF8.GetBytes(value + "\\n"));
+        void Add(string value) => hash.AppendData(Encoding.UTF8.GetBytes(value + "\n"));
         Add(Path.GetFullPath(root));
         Add(ConfigJson.ToJson(config).ToJsonString());
         Add(generateOnly.ToString());
@@ -206,7 +206,7 @@ public static class BootstrapCommand
         var temp = path + ".tmp-" + Guid.NewGuid().ToString("N");
         try
         {
-            File.WriteAllText(temp, state.ToJsonString() + "\\n");
+            File.WriteAllText(temp, state.ToJsonString() + "\n");
             File.Move(temp, path, overwrite: true);
         }
         finally
