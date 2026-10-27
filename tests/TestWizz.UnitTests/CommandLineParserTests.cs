@@ -50,6 +50,13 @@ public class CommandLineParserTests
     }
 
     [Fact]
+    public void Bootstrap_ParsesAdaptiveWorkers()
+    {
+        var parsed = Parse("bootstrap", ".", "--all", "--max-workers", "3");
+        Assert.Equal("3", parsed.Options["--max-workers"]);
+    }
+
+    [Fact]
     public void DoubleDash_TreatsRestAsArguments()
     {
         Assert.Equal(["--odd-dir"], Parse("init", "--", "--odd-dir").Arguments);
