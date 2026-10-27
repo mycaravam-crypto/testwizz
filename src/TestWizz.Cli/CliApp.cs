@@ -70,6 +70,11 @@ public sealed class CliApp(
             return command.Handler(new CommandContext(
                 command, parsed.Arguments, parsed.Options, output, workingDirectory, _getEnvironmentVariable, cancellationToken, containerRuntimes));
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            output.Error(commandName, new CliException("cancelled", "Operation cancelled by user."));
+            return ExitCodes.Error;
+        }
         catch (CliException ex)
         {
             output.Error(commandName, ex);

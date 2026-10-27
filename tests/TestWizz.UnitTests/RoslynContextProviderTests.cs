@@ -113,6 +113,9 @@ public sealed class RoslynContextProviderTests : IDisposable
         var provider = RoslynContextProvider.Load(_fixture,
             relative => relative.Replace('\\', '/').StartsWith("src/Shop/", StringComparison.Ordinal), token);
         var methods = provider.DiscoverMethods(token);
+        Assert.NotEmpty(provider.SourceHashes);
+        Assert.All(provider.SourceHashes, source => Assert.StartsWith("src/Shop/", source.Path, StringComparison.Ordinal));
+        Assert.All(provider.SourceHashes, source => Assert.Equal(64, source.Sha256.Length));
 
         Assert.Contains("M:Shop.Calculator.Divide(System.Int32,System.Int32)", methods);
         Assert.DoesNotContain(methods, id => id.Contains("Tests.", StringComparison.Ordinal));
@@ -187,6 +190,30 @@ public sealed class RoslynContextProviderTests : IDisposable
         Assert.Equal(
             ["Task<Order?> FindAsync(Guid id, CancellationToken cancellationToken)", "Task SaveAsync(Order order, CancellationToken cancellationToken)"],
             repository.Members);
+    }
+
+    [Fact]
+    public void EventFieldDependency_DoesNotThrowOnSignature()
+    {
+        var path = Path.Combine(_fixture, "src", "Shop", "EventPublisher.cs");
+        File.WriteAllText(path, """
+            namespace Shop;
+            public class EventPublisher
+            {
+                public event System.EventHandler? Changed;
+                public void Trigger() => Changed?.Invoke(this, System.EventArgs.Empty);
+            }
+            public class EventSubscriber(EventPublisher publisher)
+            {
+                public void Subscribe() => publisher.Trigger();
+            }
+            """);
+
+        var context = Context("EventSubscriber.Subscribe");
+
+        Assert.Contains(context.Dependencies, dependency =>
+            dependency.Members.Any(member => member.Contains("event", StringComparison.Ordinal)
+                && member.Contains("Changed", StringComparison.Ordinal)));
     }
 
     [Fact]

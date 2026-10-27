@@ -131,6 +131,10 @@ public sealed class RoslynContextProvider
         return [.. ids.OrderBy(id => id, StringComparer.Ordinal)];
     }
 
+    /// <summary>Source paths and hashes actually parsed by this provider (including scoped selections).</summary>
+    public IReadOnlyList<(string Path, string Sha256)> SourceHashes =>
+        [.. _files.Select(file => (file.Path, file.Sha256)).OrderBy(file => file.Path, StringComparer.Ordinal)];
+
     /// <summary>Full path of the repository root the provider was loaded from.</summary>
     public string Root => _root;
 
@@ -563,7 +567,7 @@ public sealed class RoslynContextProvider
                     ? SyntaxFactory.AccessorList([.. list.Accessors.Select(a => SyntaxFactory.AccessorDeclaration(a.Kind()).WithModifiers(a.Modifiers).WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken)))])
                     : SyntaxFactory.AccessorList([SyntaxFactory.AccessorDeclaration(SyntaxKind.GetAccessorDeclaration).WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken))])),
             EventDeclarationSyntax e => e.WithAttributeLists([]).WithAccessorList(null),
-            EventFieldDeclarationSyntax e => e.WithAttributeLists([]).WithSemicolonToken(default),
+            EventFieldDeclarationSyntax e => e.WithAttributeLists([]),
             TypeDeclarationSyntax t => t.WithAttributeLists([]).WithMembers([]).WithOpenBraceToken(default).WithCloseBraceToken(default).WithSemicolonToken(default).WithBaseList(t.BaseList),
             _ => node,
         };
