@@ -24,8 +24,8 @@ jobs:
         run: dotnet list package --vulnerable --include-transitive
       - name: Audit Vue dependencies
         run: |
-          npm install --prefix fixtures/vue --package-lock=false --ignore-scripts --no-audit --no-fund
-          npm audit --prefix fixtures/vue --audit-level=high --package-lock-only
+          npm install --prefix fixtures/vue --ignore-scripts --no-audit --no-fund
+          npm audit --prefix fixtures/vue --audit-level=high
   codeql:
     runs-on: ubuntu-latest
     permissions:
