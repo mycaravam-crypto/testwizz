@@ -1,0 +1,4 @@
+# Initial DocWizz project configuration. Review supported keys before enabling
+# a DocWizz generation or publication workflow.
+project:
+  name: TestWizz
