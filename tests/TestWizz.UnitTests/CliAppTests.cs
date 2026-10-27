@@ -73,6 +73,37 @@ public sealed class CliAppTests : IDisposable
     }
 
     [Fact]
+    public void Bootstrap_DocWizzScopeRejectsUnknownProject()
+    {
+        File.WriteAllText(ConfigPath, """{ "version": 1 }""");
+        File.WriteAllText(Path.Combine(_directory, "docwizz.yaml"), """
+            scope:
+              projects:
+                include: [missing/Unknown.csproj]
+            """);
+        var (exit, stdout, _) = Run("bootstrap", "--all", "--generate-only", "--format", "json");
+        Assert.Equal(ExitCodes.Error, exit);
+        Assert.Equal("bootstrap.scope_invalid", (string)ParseJson(stdout)["error"]!["code"]!);
+    }
+
+    [Fact]
+    public void Bootstrap_DocWizzScopeAllowsExistingProjectWithNoMethods()
+    {
+        using var output = new TemporaryOutput();
+        File.WriteAllText(ConfigPath, """{ "version": 1 }""");
+        File.WriteAllText(Path.Combine(_directory, "Selected.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        File.WriteAllText(Path.Combine(_directory, "docwizz.yaml"), """
+            scope:
+              projects:
+                include:
+                  - Selected.csproj
+            """);
+        var (exit, stdout, _) = Run("bootstrap", "--all", "--generate-only", "--out", output.Path, "--format", "json");
+        Assert.Equal(ExitCodes.Success, exit);
+        Assert.Equal(0, (int)ParseJson(stdout)["result"]!["total"]!);
+    }
+
+    [Fact]
     public void NoArguments_ShowsHelp()
     {
         var (exit, stdout, stderr) = Run();
