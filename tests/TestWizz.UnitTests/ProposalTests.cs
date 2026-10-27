@@ -288,9 +288,28 @@ public sealed class ProposalBundleTests : IAsyncLifetime
 
         Assert.True(Directory.Exists(golden), "Golden bundle is missing. Run the tests with TESTWIZZ_UPDATE_GOLDEN=1.");
         Assert.Equal(BundleFiles(golden), BundleFiles(bundle));
-        foreach (var file in BundleFiles(bundle))
+        // Package versions are Git-derived, so IDs and provenance hashes can vary by commit.
+        // Compare the stable payload while validating those dynamic fields separately.
+        var expectedManifest = JsonNode.Parse(File.ReadAllText(Path.Combine(golden, "manifest.json")))!.AsObject();
+        var actualManifest = JsonNode.Parse(File.ReadAllText(Path.Combine(bundle, "manifest.json")))!.AsObject();
+        Assert.False(string.IsNullOrWhiteSpace((string?)actualManifest["id"]));
+        Assert.False(string.IsNullOrWhiteSpace((string?)actualManifest["toolVersion"]));
+        foreach (var field in new[] { "id", "toolVersion", "contextSha256", "planSha256" })
         {
-            Assert.Equal(File.ReadAllText(Path.Combine(golden, file)).ReplaceLineEndings("\n"), File.ReadAllText(Path.Combine(bundle, file)));
+            expectedManifest.Remove(field);
+            actualManifest.Remove(field);
+        }
+        Assert.True(JsonNode.DeepEquals(expectedManifest, actualManifest));
+        foreach (var file in BundleFiles(bundle).Where(file => file != "manifest.json"))
+        {
+            var expected = File.ReadAllText(Path.Combine(golden, file)).ReplaceLineEndings("\n");
+            var actual = File.ReadAllText(Path.Combine(bundle, file)).ReplaceLineEndings("\n");
+            if (file == "findings.md")
+            {
+                expected = System.Text.RegularExpressions.Regex.Replace(expected, @"(?<=# Proposal `)[^`]+", "<dynamic>");
+                actual = System.Text.RegularExpressions.Regex.Replace(actual, @"(?<=# Proposal `)[^`]+", "<dynamic>");
+            }
+            Assert.Equal(expected, actual);
         }
     }
 
