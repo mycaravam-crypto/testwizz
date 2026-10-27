@@ -127,9 +127,17 @@ public static class GenerateCommand
         }
 
         var provider = context.SharedProvider ?? RoslynContextProvider.Load(root);
-        var document = context.SharedProvider is null
-            ? ContextCommand.Load(context, Definition.Usage)
-            : provider.GetContext(context.Options["--for"]!, CliApp.Version);
+        ContextDocument document;
+        try
+        {
+            document = context.SharedProvider is null
+                ? ContextCommand.Load(context, Definition.Usage)
+                : provider.GetContext(context.Options["--for"]!, CliApp.Version);
+        }
+        catch (ContextException ex)
+        {
+            throw ContextCommand.ToCliException(ex);
+        }
         var extractor = new CSharpScenarioExtractor();
 
         GenerationResult result;
