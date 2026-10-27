@@ -33,7 +33,13 @@ public static class BootstrapCommand
         if (!context.Has("--all"))
             throw new CliException("usage", "bootstrap currently requires --all.");
         var root = context.PathArgument();
-        var targets = RoslynContextProvider.Load(root).DiscoverMethods();
+        var provider = RoslynContextProvider.Load(root);
+        var includedProjects = DocWizzProjectScope.Read(root);
+        var targets = provider.DiscoverMethods()
+            .Where(target => includedProjects is null
+                || (provider.GetContext(target, CliApp.Version).Project is { } project
+                    && includedProjects.Contains(project.Replace('\\', '/'))))
+            .ToArray();
         var config = ConfigCommand.Load(Path.Combine(root, TestWizzConfig.FileName));
         var outputDirectory = context.Options.TryGetValue("--out", out var custom) && !string.IsNullOrWhiteSpace(custom)
             ? Path.GetFullPath(custom, context.WorkingDirectory)
@@ -41,7 +47,7 @@ public static class BootstrapCommand
         ProposalBundle.EnsureOutsideRepository(root, outputDirectory);
         Directory.CreateDirectory(outputDirectory);
         var checkpoint = Path.Combine(outputDirectory, "bootstrap-checkpoint.json");
-        var fingerprint = Fingerprint(root, config, targets, context.Has("--generate-only"));
+        var fingerprint = Fingerprint(root, config, targets, context.Has("--generate-only"), includedProjects);
         var saved = context.Has("--resume") ? ReadCheckpoint(checkpoint, fingerprint) : new JsonArray();
         var completed = saved.OfType<JsonObject>()
             .Where(row => (string?)row["generation"] == "ok"
@@ -57,7 +63,7 @@ public static class BootstrapCommand
         var skipped = 0;
         var text = new StringBuilder("# Initial test baseline\n\n");
         text.Append("| Target | Generation | Execution | Proposal |\n|---|---|---|---|\n");
-        context.Output.Stderr.WriteLine($"Discovered {targets.Count} eligible C# method(s).");
+        context.Output.Stderr.WriteLine($"Discovered {targets.Length} eligible C# method(s){(includedProjects is null ? "" : " in " + includedProjects.Count + " DocWizz-scoped project(s)")}.");
         for (var i = 0; i < targets.Count; i++)
         {
             context.CancellationToken.ThrowIfCancellationRequested();
@@ -159,7 +165,7 @@ public static class BootstrapCommand
             .Append("|\n");
     }
 
-    private static string Fingerprint(string root, TestWizzConfig config, IReadOnlyList<string> targets, bool generateOnly)
+    private static string Fingerprint(string root, TestWizzConfig config, IReadOnlyList<string> targets, bool generateOnly, IReadOnlySet<string>? includedProjects)
     {
         // Include tracked C# contents, not only HEAD: dirty worktrees must invalidate resume.
         var files = Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
@@ -171,6 +177,7 @@ public static class BootstrapCommand
         Add(Path.GetFullPath(root));
         Add(ConfigJson.ToJson(config).ToJsonString());
         Add(generateOnly.ToString());
+        foreach (var project in (includedProjects ?? []).Order(StringComparer.Ordinal)) Add(project);
         foreach (var target in targets) Add(target);
         foreach (var file in files)
         {
