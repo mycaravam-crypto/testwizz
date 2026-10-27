@@ -47,12 +47,13 @@ public sealed class RoslynContextProvider
     private readonly IReadOnlyList<SourceFile> _files;
     private readonly List<ContextDiagnostic> _loadDiagnostics = [];
 
-    private RoslynContextProvider(string root)
+    private RoslynContextProvider(string root, CancellationToken cancellationToken)
     {
         _root = root;
         var files = new List<SourceFile>();
         foreach (var relative in RepositoryFiles.CSharpFiles(root))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var full = Path.Combine(root, relative);
             var info = new FileInfo(full);
             if (info.Length > RepositoryFiles.MaxFileBytes)
@@ -77,11 +78,11 @@ public sealed class RoslynContextProvider
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable));
     }
 
-    public static RoslynContextProvider Load(string root) => new(Path.GetFullPath(root));
+    public static RoslynContextProvider Load(string root, CancellationToken cancellationToken = default) => new(Path.GetFullPath(root), cancellationToken);
 
     /// <summary>Discover eligible named C# methods, excluding test files and declarations without bodies.</summary>
     /// <remarks>Documentation IDs are stable, overload-safe targets for GetContext.</remarks>
-    public IReadOnlyList<string> DiscoverMethods() =>
+    public IReadOnlyList<string> DiscoverMethods(CancellationToken cancellationToken = default) =>
         [.. Candidates()
             .Where(candidate => candidate.Node is MethodDeclarationSyntax method
                 && (method.Body is not null || method.ExpressionBody is not null)
@@ -89,13 +90,19 @@ public sealed class RoslynContextProvider
             .Select(candidate => new
             {
                 candidate.Id,
-                Symbol = _compilation.GetSemanticModel(candidate.File.Tree).GetDeclaredSymbol(candidate.Node),
+                Symbol = DeclaredSymbol(candidate, cancellationToken),
             })
             .Where(item => item.Symbol?.DeclaredAccessibility is Accessibility.Public or Accessibility.Internal or Accessibility.ProtectedOrInternal)
             .Select(item => item.Id)
             .Where(id => id.StartsWith("M:", StringComparison.Ordinal))
             .Distinct(StringComparer.Ordinal)
             .OrderBy(id => id, StringComparer.Ordinal)];
+
+    private ISymbol? DeclaredSymbol(Match candidate, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return _compilation.GetSemanticModel(candidate.File.Tree).GetDeclaredSymbol(candidate.Node);
+    }
 
     /// <summary>Full path of the repository root the provider was loaded from.</summary>
     public string Root => _root;
