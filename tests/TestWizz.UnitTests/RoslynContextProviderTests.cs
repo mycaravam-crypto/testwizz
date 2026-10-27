@@ -83,7 +83,13 @@ public sealed class RoslynContextProviderTests : IDisposable
         }
 
         Assert.True(File.Exists(path), $"Golden file {golden} is missing. Run the tests with TESTWIZZ_UPDATE_GOLDEN=1.");
-        Assert.Equal(File.ReadAllText(path).ReplaceLineEndings("\n"), actual);
+        var expected = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        var observed = JsonNode.Parse(actual)!.AsObject();
+        Assert.Equal(typeof(Microsoft.CodeAnalysis.CSharp.CSharpCompilation).Assembly.GetName().Version!.ToString(),
+            (string?)observed["provenance"]!["providerVersion"]);
+        expected["provenance"]!.AsObject().Remove("providerVersion");
+        observed["provenance"]!.AsObject().Remove("providerVersion");
+        Assert.True(JsonNode.DeepEquals(expected, observed));
     }
 
     [Fact]
