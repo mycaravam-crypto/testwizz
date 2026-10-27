@@ -78,11 +78,15 @@ public sealed class RoslynContextProvider
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable));
     }
 
-    public static RoslynContextProvider Load(string root, CancellationToken cancellationToken = default) => new(Path.GetFullPath(root), cancellationToken);
+    public static RoslynContextProvider Load(string root) => Load(root, CancellationToken.None);
+
+    public static RoslynContextProvider Load(string root, CancellationToken cancellationToken) => new(Path.GetFullPath(root), cancellationToken);
 
     /// <summary>Discover eligible named C# methods, excluding test files and declarations without bodies.</summary>
     /// <remarks>Documentation IDs are stable, overload-safe targets for GetContext.</remarks>
-    public IReadOnlyList<string> DiscoverMethods(CancellationToken cancellationToken = default) =>
+    public IReadOnlyList<string> DiscoverMethods() => DiscoverMethods(CancellationToken.None);
+
+    public IReadOnlyList<string> DiscoverMethods(CancellationToken cancellationToken) =>
         [.. Candidates()
             .Where(candidate => candidate.Node is MethodDeclarationSyntax method
                 && (method.Body is not null || method.ExpressionBody is not null)
