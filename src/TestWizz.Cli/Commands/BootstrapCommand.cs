@@ -60,11 +60,7 @@ public static class BootstrapCommand
                 if (discoveryClock.Elapsed - lastDiscoveryReport < TimeSpan.FromSeconds(2) && done != total) return;
                 lastDiscoveryReport = discoveryClock.Elapsed;
                 context.Output.Stderr.WriteLine($"testwizz bootstrap: discovering methods: {done}/{total} source files ({discoveryClock.Elapsed.TotalSeconds:F1}s)");
-            }, context.CancellationToken)
-            .Where(target => includedProjects is null
-                || (provider.GetContext(target, CliApp.Version).Project is { } project
-                    && includedProjects.Contains(project.Replace('\\', '/'))))
-            .ToArray();
+            }, context.CancellationToken).ToArray();
         context.CancellationToken.ThrowIfCancellationRequested();
         context.Output.Stderr.WriteLine($"testwizz bootstrap: discovery completed ({clock.Elapsed.TotalSeconds:F1}s); loading configuration...");
         var config = ConfigCommand.Load(Path.Combine(root, TestWizzConfig.FileName));
@@ -76,7 +72,7 @@ public static class BootstrapCommand
         Directory.CreateDirectory(outputDirectory);
         var checkpoint = Path.Combine(outputDirectory, "bootstrap-checkpoint.json");
         context.Output.Stderr.WriteLine("testwizz bootstrap: fingerprinting C# sources for safe resume...");
-        var fingerprint = Fingerprint(root, config, targets, context.Has("--generate-only"), includedProjects, context.CancellationToken);
+        var fingerprint = Fingerprint(root, config, targets, context.Has("--generate-only"), includedProjects, provider.SourceHashes, context.CancellationToken);
         context.Output.Stderr.WriteLine($"testwizz bootstrap: fingerprint ready ({clock.Elapsed.TotalSeconds:F1}s)");
         var saved = context.Has("--resume") ? ReadCheckpoint(checkpoint, fingerprint) : new JsonArray();
         var completed = saved.OfType<JsonObject>()
@@ -325,13 +321,8 @@ public static class BootstrapCommand
             .Append("|\n");
     }
 
-    private static string Fingerprint(string root, TestWizzConfig config, IReadOnlyList<string> targets, bool generateOnly, IReadOnlySet<string>? includedProjects, CancellationToken cancellationToken)
+    private static string Fingerprint(string root, TestWizzConfig config, IReadOnlyList<string> targets, bool generateOnly, IReadOnlySet<string>? includedProjects, IReadOnlyList<(string Path, string Sha256)> sources, CancellationToken cancellationToken)
     {
-        // Include tracked C# contents, not only HEAD: dirty worktrees must invalidate resume.
-        var files = Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
-            .Where(path => !path.Split(Path.DirectorySeparatorChar).Any(part =>
-                part is ".git" or "bin" or "obj" or "node_modules"))
-            .Order(StringComparer.Ordinal);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         void Add(string value) => hash.AppendData(Encoding.UTF8.GetBytes(value + "\n"));
         Add(Path.GetFullPath(root));
@@ -339,11 +330,11 @@ public static class BootstrapCommand
         Add(generateOnly.ToString());
         foreach (var project in (includedProjects ?? new HashSet<string>(StringComparer.Ordinal)).Order(StringComparer.Ordinal)) Add(project);
         foreach (var target in targets) Add(target);
-        foreach (var file in files)
+        foreach (var (path, sha256) in sources)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            Add(Path.GetRelativePath(root, file));
-            hash.AppendData(File.ReadAllBytes(file));
+            Add(path);
+            Add(sha256);
         }
         return Convert.ToHexStringLower(hash.GetHashAndReset());
     }
