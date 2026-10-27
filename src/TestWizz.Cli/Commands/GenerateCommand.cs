@@ -123,8 +123,10 @@ public static class GenerateCommand
             throw new CliException(ex.Code, ex.Message);
         }
 
-        var document = ContextCommand.Load(context, Definition.Usage);
-        var provider = RoslynContextProvider.Load(root);
+        var provider = context.SharedProvider ?? RoslynContextProvider.Load(root);
+        var document = context.SharedProvider is null
+            ? ContextCommand.Load(context, Definition.Usage)
+            : provider.GetContext(context.Options["--for"]!, CliApp.Version);
         var extractor = new CSharpScenarioExtractor();
 
         GenerationResult result;
@@ -132,7 +134,8 @@ public static class GenerateCommand
         try
         {
             var extraction = extractor.Extract(document);
-            using var client = ModelClient.Create(settings, context.GetEnvironmentVariable);
+            using var ownedClient = context.SharedModel is null ? ModelClient.Create(settings, context.GetEnvironmentVariable) : null;
+            var client = context.SharedModel ?? ownedClient!;
             var enrichment = context.Has(AiPlanOption)
                 ? ScenarioEnricher.EnrichAsync(client, document, extraction, context.CancellationToken).GetAwaiter().GetResult()
                 : null;
