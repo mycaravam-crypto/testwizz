@@ -93,6 +93,20 @@ public sealed class RoslynContextProviderTests : IDisposable
     }
 
     [Fact]
+    public void Discovery_ReportsSourceFileProgressAndMatchesOriginalResults()
+    {
+        var provider = RoslynContextProvider.Load(_fixture, TestContext.Current.CancellationToken);
+        var reports = new List<(int Done, int Total)>();
+        var found = provider.DiscoverMethods(TestContext.Current.CancellationToken,
+            (done, total) => reports.Add((done, total)));
+
+        Assert.Equal(provider.DiscoverMethods(TestContext.Current.CancellationToken), found);
+        Assert.NotEmpty(reports);
+        Assert.Equal(reports.Count, reports[^1].Done);
+        Assert.Equal(reports.Count, reports[^1].Total);
+    }
+
+    [Fact]
     public void Discovery_ReturnsDistinctOverloadSafeProductionMethods()
     {
         var methods = RoslynContextProvider.Load(_fixture, TestContext.Current.CancellationToken).DiscoverMethods(TestContext.Current.CancellationToken);
