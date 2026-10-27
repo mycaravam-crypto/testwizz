@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "devDependencies": {
-    "@vue/compiler-sfc": "3.5.22",
+    "@vue/compiler-sfc": "3.5.44",
     "typescript": "5.9.3",
-    "vue": "3.5.22",
+    "vue": "3.5.44",
     "vue-router": "4.5.1"
   }
 }
