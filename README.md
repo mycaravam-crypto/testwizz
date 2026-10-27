@@ -23,6 +23,21 @@ Global options: `--format text|json`, `--help`, `--version`.
 With `--format json`, stdout contains exactly one JSON object (`"schema": "testwizz.output/v1"`); human-readable diagnostics go to stderr.
 Exit codes: `0` success, `1` validation failed, `2` usage, configuration or runtime error.
 
+## Batch performance and debug output
+
+Changed-method generation supports adaptive concurrency:
+
+```bash
+testwizz generate . --since main --all-changed --max-workers 4 --debug
+testwizz bootstrap . --all --generate-only --debug
+```
+
+- `--max-workers N` (1-8, default 4) applies to `generate --all-changed`. Work starts at one request, ramps up when end-to-end throughput is acceptable, and backs off when throughput falls more than 10% relative to the preceding wave. The measured performance depends on the model, server, and target complexity; validate with representative benchmarks.
+- The changed-code batch loads one Roslyn context provider and one reusable model client instead of reloading these per target.
+- `bootstrap --all` uses adaptive concurrent generation with shared Roslyn and model clients; container test execution and checkpoint writes remain serialized.
+- `--debug` prints proposed C# test files to stderr, preserving JSON stdout. Generated code may contain confidential repository details; only enable it in trusted terminals or controlled logs. Debug output is grouped by target in concurrent batches.
+- Per-target elapsed seconds and each wave's throughput are reported for performance diagnosis. Proposals are still review-first and are not automatically applied.
+
 ## Initial repository baseline (experimental)
 
 ```bash
