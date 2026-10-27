@@ -29,7 +29,7 @@ internal static class TestWizzYaml
         yaml.Load(reader);
         if (yaml.Documents.Count != 1)
             throw new FormatException("Expected one YAML document.");
-        return ConvertNode(yaml.Documents[0].RootNode).ToJsonString();
+        return ConvertNode(yaml.Documents[0].RootNode)?.ToJsonString() ?? "null";
     }
 
     private static JsonNode? ConvertNode(YamlNode node) => node switch
