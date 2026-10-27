@@ -33,6 +33,7 @@ public sealed class CliAppTests : IDisposable
     [Fact]
     public void Bootstrap_EmptyRepository_HasDeterministicJsonResult()
     {
+        File.WriteAllText(ConfigPath, """{ "version": 1 }""");
         var (exit, stdout, stderr) = Run("bootstrap", "--all", "--generate-only", "--format", "json");
         Assert.Equal(ExitCodes.Success, exit);
         var json = ParseJson(stdout);
@@ -41,6 +42,34 @@ public sealed class CliAppTests : IDisposable
         Assert.Equal(0, (int)json["result"]!["total"]!);
         Assert.Empty(json["result"]!["items"]!.AsArray());
         Assert.Contains("No eligible C# methods", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Bootstrap_ResumeEmptyScan_ReusesCheckpoint()
+    {
+        using var output = new TemporaryOutput();
+        File.WriteAllText(ConfigPath, """{ "version": 1 }""");
+        Assert.Equal(ExitCodes.Success, Run("bootstrap", "--all", "--generate-only", "--out", output.Path).ExitCode);
+        Assert.Equal(ExitCodes.Success, Run("bootstrap", "--all", "--generate-only", "--resume", "--out", output.Path).ExitCode);
+        Assert.True(File.Exists(System.IO.Path.Combine(output.Path, "bootstrap-checkpoint.json")));
+    }
+
+    [Fact]
+    public void Bootstrap_ResumeRejectsChangedConfiguration()
+    {
+        using var output = new TemporaryOutput();
+        File.WriteAllText(ConfigPath, """{ "version": 1 }""");
+        Assert.Equal(ExitCodes.Success, Run("bootstrap", "--all", "--generate-only", "--out", output.Path).ExitCode);
+        File.WriteAllText(ConfigPath, """{ "version": 1, "ai": { "model": "changed" } }""");
+        var (exit, stdout, _) = Run("bootstrap", "--all", "--generate-only", "--resume", "--out", output.Path, "--format", "json");
+        Assert.Equal(ExitCodes.Error, exit);
+        Assert.Equal("bootstrap.changed", (string)ParseJson(stdout)["error"]!["code"]!);
+    }
+
+    private sealed class TemporaryOutput : IDisposable
+    {
+        public string Path { get; } = Directory.CreateTempSubdirectory("testwizz-bootstrap-output-").FullName;
+        public void Dispose() => Directory.Delete(Path, recursive: true);
     }
 
     [Fact]
