@@ -50,6 +50,7 @@ const propDetails = new Map();
 const propDefaults = new Map();
 const emitDetails = new Map();
 const emitCalls = [];
+const templateEvents = [];
 const exposed = new Set();
 const computed = new Set();
 const watched = new Set();
@@ -223,6 +224,16 @@ if (descriptor.template) {
       for (const prop of node.props ?? []) {
         if (prop.type === 7 && prop.name === 'slot' && prop.arg?.type === 4 && prop.arg.content) {
           slots.add(prop.arg.content);
+        }
+        // Only static event names are mapped; dynamic arguments need a separate,
+        // explicitly reviewable representation rather than a guessed event name.
+        if (prop.type === 7 && prop.name === 'on' && prop.arg?.type === 4 && prop.arg.isStatic) {
+          const absoluteOffset = prop.loc.start.offset;
+          templateEvents.push({
+            name: prop.arg.content,
+            line: source.slice(0, absoluteOffset).split(/\n/).length,
+            handler: prop.exp?.content ?? ''
+          });
         }
       }
     }
@@ -402,6 +413,7 @@ console.log(JSON.stringify({
   propDetails: [...propDetails.values()].sort((a, b) => a.name.localeCompare(b.name)),
   emitDetails: [...emitDetails.values()].sort((a, b) => a.name.localeCompare(b.name)),
   emitCalls: emitCalls.sort((a, b) => a.line - b.line || a.name.localeCompare(b.name)),
+  templateEvents: templateEvents.sort((a, b) => a.line - b.line || a.name.localeCompare(b.name)),
   exposed: [...exposed].sort(),
   computed: [...computed].sort(),
   watched: [...watched].sort(),

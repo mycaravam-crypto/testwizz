@@ -90,6 +90,14 @@ public static class VueContext
                     int payloadCount = item.GetProperty("payloadCount").GetInt32();
                     members = [.. members, new MemberInfo($"emit-call:{emitName}:{line}", $"emit call {emitName} at line {line} (payload arguments: {payloadCount})", relative, line)];
                 }
+            if (data.TryGetProperty("templateEvents", out JsonElement templateEvents) && templateEvents.ValueKind == JsonValueKind.Array)
+                foreach (JsonElement item in templateEvents.EnumerateArray())
+                {
+                    string eventName = item.GetProperty("name").GetString() ?? "";
+                    int line = item.GetProperty("line").GetInt32();
+                    string handler = item.GetProperty("handler").GetString() ?? "";
+                    members = [.. members, new MemberInfo($"template-event:{eventName}:{line}", $"template event {eventName} at line {line} (handler: {handler})", relative, line)];
+                }
             foreach (string kind in new[] { "exposed", "computed", "watched", "imports", "mockCandidates" })
                 if (data.TryGetProperty(kind, out JsonElement values) && values.ValueKind == JsonValueKind.Array)
                     foreach (JsonElement item in values.EnumerateArray())

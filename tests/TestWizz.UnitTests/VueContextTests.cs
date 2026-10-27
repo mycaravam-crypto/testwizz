@@ -36,6 +36,9 @@ public sealed class VueContextTests
         Assert.Contains(context.Members, member => member.Id == "emit-call:select:16"
             && member.Signature == "emit call select at line 16 (payload arguments: 1)"
             && member.Line == 16);
+        Assert.Contains(context.Members, member => member.Id == "template-event:click:25"
+            && member.Signature == "template event click at line 25 (handler: emit('select', count))"
+            && member.Line == 25);
         Assert.Contains(context.Members, member => member.Signature == "exposed focus");
         Assert.Contains(context.Members, member => member.Signature == "computed isVisible");
         Assert.Contains(context.Members, member => member.Signature == "watched () => props.count");

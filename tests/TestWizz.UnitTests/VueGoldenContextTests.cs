@@ -33,6 +33,7 @@ public sealed class VueGoldenContextTests
                         || signature.StartsWith("mockCandidates ", StringComparison.Ordinal)
                         || signature.StartsWith("prop ", StringComparison.Ordinal)
                         || signature.StartsWith("slots ", StringComparison.Ordinal)
+                        || signature.StartsWith("template event ", StringComparison.Ordinal)
                         || signature.StartsWith("watched ", StringComparison.Ordinal))
                     .OrderBy(signature => signature, StringComparer.Ordinal).ToArray()
                 : context.Members.Select(m => m.Id).OrderBy(id => id, StringComparer.Ordinal).ToArray(),
