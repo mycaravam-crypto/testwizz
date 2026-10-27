@@ -19,6 +19,7 @@ public static class GenerateCommand
     private const string ListChangedOption = "--list-changed";
     private const string AllChangedOption = "--all-changed";
     private const string MinRiskOption = "--min-risk";
+    private const string DebugOption = "--debug";
     private const int MaxBatchTargets = 20;
 
     public static CommandDefinition Definition { get; } = new(
@@ -34,6 +35,7 @@ public static class GenerateCommand
             new(ListChangedOption, "List changed C# methods without AI calls; suitable for CI."),
             new(AllChangedOption, "Generate proposals for up to 20 changed C# methods and produce one CI summary."),
             new(MinRiskOption, "Minimum deterministic method-risk score (0-100).", "score"),
+            new(DebugOption, "Print each generated test source to stderr (may contain sensitive source code)."),
         ],
         MaxArguments: 1,
         Handler: Run);
@@ -53,10 +55,12 @@ public static class GenerateCommand
         if (context.Has(SinceOption))
         {
             var since = context.Options[SinceOption];
+            List<ChangedMethod> ranked;
             List<string> targets;
             try
             {
-                targets = ChangedCode.Ranked(root, since ?? "").Where(m => m.Risk >= minRisk).Select(m => m.Target).ToList();
+                ranked = ChangedCode.Ranked(root, since ?? "").Where(m => m.Risk >= minRisk).ToList();
+                targets = ranked.Select(m => m.Target).ToList();
             }
             catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
             {
@@ -70,7 +74,7 @@ public static class GenerateCommand
                     ["schema"] = "testwizz.changed-targets/v1",
                     ["base"] = since,
                     ["count"] = targets.Count,
-                    ["risk"] = new JsonArray([.. ChangedCode.Ranked(root, since ?? "").Where(m => m.Risk >= minRisk).Select(m => (JsonNode?)new JsonObject { ["target"] = m.Target, ["score"] = m.Risk, ["reasons"] = new JsonArray([.. m.Reasons.Select(r => (JsonNode?)JsonValue.Create(r))]) })]),
+                    ["risk"] = new JsonArray([.. ranked.Select(m => (JsonNode?)new JsonObject { ["target"] = m.Target, ["score"] = m.Risk, ["reasons"] = new JsonArray([.. m.Reasons.Select(r => (JsonNode?)JsonValue.Create(r))]) })]),
                     ["targets"] = new JsonArray([.. targets.Select(t => (JsonNode?)JsonValue.Create(t))]),
                 };
                 var markdown = new StringBuilder("# Changed C# targets\n\n| Target |\n|---|\n");
@@ -80,7 +84,7 @@ public static class GenerateCommand
                 return ExitCodes.Success;
             }
             if (context.Has(AllChangedOption))
-                return RunBatch(context, targets, since ?? "", minRisk);
+                return RunBatch(context, ranked, since ?? "", minRisk);
 
             if (targets.Count == 0)
             {
@@ -163,14 +167,27 @@ public static class GenerateCommand
             throw new CliException(ex.Code, ex.Message);
         }
 
+        if (context.Has(DebugOption))
+        {
+            foreach (var file in result.Files)
+            {
+                context.Output.Stderr.WriteLine($"[testwizz debug] BEGIN generated test: {file.Path}");
+                context.Output.Stderr.Write(file.Content);
+                if (!file.Content.EndsWith('\n')) context.Output.Stderr.WriteLine();
+                context.Output.Stderr.WriteLine($"[testwizz debug] END generated test: {file.Path}");
+            }
+        }
+
         var json = proposal.Manifest.DeepClone().AsObject();
         json["path"] = proposal.Directory;
         context.Output.Result("generate", json, ToText(result, proposal), result.IsValid ? "ok" : "failed");
         return result.IsValid ? ExitCodes.Success : ExitCodes.ValidationFailed;
     }
 
-    private static int RunBatch(CommandContext context, List<string> targets, string since, int minRisk)
+    private static int RunBatch(CommandContext context, List<ChangedMethod> ranked, string since, int minRisk)
     {
+        var targets = ranked.Select(m => m.Target).ToList();
+        var riskByTarget = ranked.ToDictionary(m => m.Target, m => m.Risk, StringComparer.Ordinal);
         if (targets.Count > MaxBatchTargets)
             throw new CliException("target.too_many", $"Changed methods: {targets.Count}; maximum is {MaxBatchTargets}. Narrow the Git comparison.");
         var rows = new JsonArray();
@@ -211,7 +228,7 @@ public static class GenerateCommand
             rows.Add(new JsonObject
             {
                 ["target"] = target,
-                ["risk"] = ChangedCode.Ranked(context.PathArgument(), since).First(m => m.Target == target).Risk,
+                ["risk"] = riskByTarget[target],
                 ["status"] = status,
                 ["proposal"] = proposalPath,
                 ["errorCode"] = errorCode,
