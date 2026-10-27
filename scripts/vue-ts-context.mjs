@@ -17,9 +17,14 @@ if (!filename.startsWith(root + path.sep) || !fs.existsSync(filename) ||
 }
 const require = createRequire(path.join(root, 'package.json'));
 let ts;
-try { ts = require('typescript'); }
+try {
+  ts = require('typescript');
+  // TypeScript 7 provides a native compiler CLI but no longer exposes the classic JS AST API.
+  // Keep source analysis on the explicitly pinned compiler API package.
+  if (typeof ts.createSourceFile !== 'function') ts = require('typescript-parser');
+}
 catch {
-  console.error('Install project dependencies: npm install (requires typescript in the target project).');
+  console.error('Install project dependencies: npm install (requires the TypeScript compiler API).');
   process.exit(2);
 }
 const source = fs.readFileSync(filename, 'utf8');
