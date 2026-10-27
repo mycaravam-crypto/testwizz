@@ -64,7 +64,7 @@ public static class BootstrapCommand
         var text = new StringBuilder("# Initial test baseline\n\n");
         text.Append("| Target | Generation | Execution | Proposal |\n|---|---|---|---|\n");
         context.Output.Stderr.WriteLine($"Discovered {targets.Length} eligible C# method(s){(includedProjects is null ? "" : " in " + includedProjects.Count + " DocWizz-scoped project(s)")}.");
-        for (var i = 0; i < targets.Count; i++)
+        for (var i = 0; i < targets.Length; i++)
         {
             context.CancellationToken.ThrowIfCancellationRequested();
             var target = targets[i];
@@ -75,10 +75,10 @@ public static class BootstrapCommand
                 succeeded++;
                 AppendRow(text, target, (string?)restored["generation"] ?? "ok",
                     (string?)restored["execution"] ?? "not-run", (string?)restored["proposal"]);
-                ReportProgress(context, i + 1, targets.Count, target, "resumed", clock.Elapsed);
+                ReportProgress(context, i + 1, targets.Length, target, "resumed", clock.Elapsed);
                 continue;
             }
-            ReportProgress(context, i, targets.Count, target, "generating", clock.Elapsed);
+            ReportProgress(context, i, targets.Length, target, "generating", clock.Elapsed);
             string generation = "error", execution = "not-run";
             string? proposal = null, error = null;
             try
@@ -104,7 +104,7 @@ public static class BootstrapCommand
                     throw new CliException("bootstrap.no_proposal", "Generation succeeded without a proposal path.");
                 if (generationExit == ExitCodes.Success && proposal is not null && !context.Has("--generate-only"))
                 {
-                    ReportProgress(context, i, targets.Count, target, "running", clock.Elapsed);
+                    ReportProgress(context, i, targets.Length, target, "running", clock.Elapsed);
                     using var runOutput = new StringWriter(CultureInfo.InvariantCulture);
                     var runContext = context with
                     {
@@ -139,16 +139,16 @@ public static class BootstrapCommand
             });
             AppendRow(text, target, generation, execution, proposal);
             SaveCheckpoint(checkpoint, fingerprint, rows);
-            ReportProgress(context, i + 1, targets.Count, target, "complete", clock.Elapsed);
+            ReportProgress(context, i + 1, targets.Length, target, "complete", clock.Elapsed);
         }
 
-        if (targets.Count == 0)
+        if (targets.Length == 0)
             context.Output.Stderr.WriteLine("No eligible C# methods discovered.");
-        text.Append(CultureInfo.InvariantCulture, $"\n{targets.Count} targets; {succeeded} successful, {failed} failed, {skipped} skipped. Proposals remain outside the repository; nothing was applied.\n");
+        text.Append(CultureInfo.InvariantCulture, $"\n{targets.Length} targets; {succeeded} successful, {failed} failed, {skipped} skipped. Proposals remain outside the repository; nothing was applied.\n");
         context.Output.Result("bootstrap", new JsonObject
         {
             ["schema"] = "testwizz.bootstrap/v1",
-            ["total"] = targets.Count,
+            ["total"] = targets.Length,
             ["succeeded"] = succeeded,
             ["failed"] = failed,
             ["skipped"] = skipped,
@@ -177,7 +177,7 @@ public static class BootstrapCommand
         Add(Path.GetFullPath(root));
         Add(ConfigJson.ToJson(config).ToJsonString());
         Add(generateOnly.ToString());
-        foreach (var project in (includedProjects ?? []).Order(StringComparer.Ordinal)) Add(project);
+        foreach (var project in (includedProjects ?? new HashSet<string>(StringComparer.Ordinal)).Order(StringComparer.Ordinal)) Add(project);
         foreach (var target in targets) Add(target);
         foreach (var file in files)
         {
