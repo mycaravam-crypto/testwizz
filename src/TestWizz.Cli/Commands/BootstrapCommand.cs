@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -28,6 +29,7 @@ public static class BootstrapCommand
 
     private static int Run(CommandContext context)
     {
+        var clock = Stopwatch.StartNew();
         if (!context.Has("--all"))
             throw new CliException("usage", "bootstrap currently requires --all.");
         var root = context.PathArgument();
@@ -67,10 +69,10 @@ public static class BootstrapCommand
                 succeeded++;
                 AppendRow(text, target, (string?)restored["generation"] ?? "ok",
                     (string?)restored["execution"] ?? "not-run", (string?)restored["proposal"]);
-                ReportProgress(context, i + 1, targets.Count, target, "resumed");
+                ReportProgress(context, i + 1, targets.Count, target, "resumed", clock.Elapsed);
                 continue;
             }
-            ReportProgress(context, i, targets.Count, target, "generating");
+            ReportProgress(context, i, targets.Count, target, "generating", clock.Elapsed);
             string generation = "error", execution = "not-run";
             string? proposal = null, error = null;
             try
@@ -96,7 +98,7 @@ public static class BootstrapCommand
                     throw new CliException("bootstrap.no_proposal", "Generation succeeded without a proposal path.");
                 if (generationExit == ExitCodes.Success && proposal is not null && !context.Has("--generate-only"))
                 {
-                    ReportProgress(context, i, targets.Count, target, "running");
+                    ReportProgress(context, i, targets.Count, target, "running", clock.Elapsed);
                     using var runOutput = new StringWriter(CultureInfo.InvariantCulture);
                     var runContext = context with
                     {
@@ -131,7 +133,7 @@ public static class BootstrapCommand
             });
             AppendRow(text, target, generation, execution, proposal);
             SaveCheckpoint(checkpoint, fingerprint, rows);
-            ReportProgress(context, i + 1, targets.Count, target, "complete");
+            ReportProgress(context, i + 1, targets.Count, target, "complete", clock.Elapsed);
         }
 
         if (targets.Count == 0)
@@ -223,23 +225,29 @@ public static class BootstrapCommand
         return options;
     }
 
-    private static void ReportProgress(CommandContext context, int completed, int total, string target, string phase)
+    // Match the 24-column, equals-filled stage bars used by DocWizz; keep CI logs free of control codes.
+    private static void ReportProgress(CommandContext context, int completed, int total, string target, string phase, TimeSpan elapsed)
     {
+        const int width = 24;
         var percent = total == 0 ? 100 : completed * 100 / total;
-        var width = 20;
         var filled = percent * width / 100;
-        var bar = new string('#', filled) + new string('-', width - filled);
+        var bar = new string('=', filled) + new string('-', width - filled);
+        var duration = elapsed.TotalHours >= 1
+            ? elapsed.ToString(@"h\:mm\:ss", CultureInfo.InvariantCulture)
+            : elapsed.ToString(@"m\:ss", CultureInfo.InvariantCulture);
         var writer = context.Output.Stderr;
-        if (ReferenceEquals(writer, Console.Error) && !Console.IsErrorRedirected)
+        var line = $"testwizz [{bar}] {percent,3}% ({completed}/{total}) {phase}: {target} ({duration})";
+        if (ReferenceEquals(writer, Console.Error) && !Console.IsErrorRedirected
+            && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CI"))
+            && Environment.GetEnvironmentVariable("TERM") != "dumb")
         {
             var maxWidth = Math.Max(20, Console.WindowWidth - 1);
-            var line = $"[{bar}] {percent,3}% ({completed}/{total}) {phase}: {target}";
             writer.Write("\r" + (line.Length > maxWidth ? line[..maxWidth] : line).PadRight(maxWidth));
             if (completed == total) writer.WriteLine();
         }
-        else
+        else if (phase is "complete" or "resumed")
         {
-            writer.WriteLine($"[{bar}] {percent,3}% ({completed}/{total}) {phase}: {target}");
+            writer.WriteLine(line);
         }
     }
 }
