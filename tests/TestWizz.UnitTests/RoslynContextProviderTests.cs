@@ -107,6 +107,18 @@ public sealed class RoslynContextProviderTests : IDisposable
     }
 
     [Fact]
+    public void ScopedLoad_ExcludesSourcesBeforeCompilation()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var provider = RoslynContextProvider.Load(_fixture,
+            relative => relative.Replace('\\', '/').StartsWith("src/Shop/", StringComparison.Ordinal), token);
+        var methods = provider.DiscoverMethods(token);
+
+        Assert.Contains("M:Shop.Calculator.Divide(System.Int32,System.Int32)", methods);
+        Assert.DoesNotContain(methods, id => id.Contains("Tests.", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Discovery_ReturnsDistinctOverloadSafeProductionMethods()
     {
         var methods = RoslynContextProvider.Load(_fixture, TestContext.Current.CancellationToken).DiscoverMethods(TestContext.Current.CancellationToken);
