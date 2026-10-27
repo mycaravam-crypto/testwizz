@@ -57,3 +57,19 @@ dotnet tool install --global TestWizz --add-source ./artifacts
 ```
 
 Use this only when you intend to replace your installed version. The Git-derived version applies when packing from the repository; `git pull` alone never installs the new binary.
+
+### Respect DocWizz project scope
+
+When `docwizz.yaml` exists in the target repository and contains `scope.projects.include`, `tw bootstrap . --all` generates tests **only for C# methods owned by those listed .NET projects**. Paths must name existing `.csproj` manifests relative to the scan root (case-sensitive, using `/`), for example:
+
+```yaml
+scope:
+  projects:
+    include:
+      - src/Shop/Shop.csproj
+      - src/Billing/Billing.csproj
+```
+
+Without `docwizz.yaml` or without a `scope` block, TestWizz retains its normal repository-wide method discovery. An invalid or empty configured project list fails rather than silently scanning everything. Non-.NET projects listed in the include array are currently not supported by this C#-only bootstrap integration. The project scope is part of the resume fingerprint: changing the project selection requires starting a fresh scan without `--resume`.
+
+This is a **project selection filter**. DocWizz's additional `references`, `test_links`, and `unassigned_sources` policies are not interpreted by TestWizz.
