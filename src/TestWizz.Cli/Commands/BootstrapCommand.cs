@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Threading.Tasks;
 using System.Globalization;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -16,7 +17,7 @@ public static class BootstrapCommand
     public static CommandDefinition Definition { get; } = new(
         "bootstrap",
         "Discover all eligible C# methods, generate test proposals and optionally run them in isolated containers. Never applies changes.",
-        "testwizz bootstrap [path] --all [--review] [--generate-only] [--resume] [--out <dir>]",
+        "testwizz bootstrap [path] --all [--review] [--generate-only] [--resume] [--max-workers <n>] [--out <dir>]",
         Options:
         [
             new("--all", "Discover and process all eligible C# methods."),
@@ -25,6 +26,7 @@ public static class BootstrapCommand
             new("--resume", "Continue a matching scan, skipping previously successful targets."),
             new("--out", "Proposal directory outside the repository.", "dir"),
             new("--debug", "Print each generated test source to stderr (may contain sensitive source code)."),
+            new("--max-workers", "Maximum adaptive generation workers (1-8; default 4).", "n"),
         ],
         MaxArguments: 1,
         Handler: Run);
@@ -32,6 +34,10 @@ public static class BootstrapCommand
     private static int Run(CommandContext context)
     {
         var clock = Stopwatch.StartNew();
+        var maxWorkers = 4;
+        if (context.Options.TryGetValue("--max-workers", out var workerText)
+            && (!int.TryParse(workerText, NumberStyles.None, CultureInfo.InvariantCulture, out maxWorkers) || maxWorkers is < 1 or > 8))
+            throw new CliException("usage", "--max-workers must be between 1 and 8.");
         if (!context.Has("--all"))
             throw new CliException("usage", "bootstrap currently requires --all.");
         var root = context.PathArgument();
@@ -67,6 +73,39 @@ public static class BootstrapCommand
         var text = new StringBuilder("# Initial test baseline\n\n");
         text.Append("| Target | Generation | Execution | Proposal |\n|---|---|---|---|\n");
         context.Output.Stderr.WriteLine($"Discovered {targets.Length} eligible C# method(s){(includedProjects is null ? "" : " in " + includedProjects.Count + " DocWizz-scoped project(s)")}.");
+        var pending = targets.Where(target => !completed.ContainsKey(target)).ToArray();
+        var generatedResults = new Dictionary<string, BootstrapItem>(StringComparer.Ordinal);
+        var workers = 1;
+        double previousThroughput = 0;
+        var position = 0;
+        // Run model generation in bounded waves. Only the coordinator writes checkpoints
+        // and executes containers, avoiding concurrent checkpoint changes and test-environment collisions.
+        while (position < pending.Length)
+        {
+            context.CancellationToken.ThrowIfCancellationRequested();
+            var batch = pending.Skip(position).Take(workers).ToArray();
+            var waveClock = Stopwatch.StartNew();
+            var tasks = batch.Select(target => Task.Run(() => GenerateTarget(context, provider, model, target),
+                context.CancellationToken)).ToArray();
+            Task.WhenAll(tasks).GetAwaiter().GetResult();
+            waveClock.Stop();
+            foreach (var task in tasks)
+            {
+                var item = task.Result;
+                generatedResults[item.Target] = item;
+                if (item.Diagnostics.Length > 0) context.Output.Stderr.Write(item.Diagnostics);
+                context.Output.Stderr.WriteLine($"testwizz bootstrap generated: {item.Target}: {item.Generation} ({item.Seconds:F1}s)");
+            }
+            position += batch.Length;
+            var throughput = batch.Length / Math.Max(waveClock.Elapsed.TotalSeconds, 0.001);
+            context.Output.Stderr.WriteLine($"testwizz bootstrap: workers={workers}, throughput={throughput:F3} targets/s");
+            if (workers > 1 && previousThroughput > 0 && throughput < previousThroughput * 0.9)
+                workers = Math.Max(1, workers - 1);
+            else if (workers < maxWorkers && position < pending.Length)
+                workers++;
+            previousThroughput = throughput;
+        }
+
         for (var i = 0; i < targets.Length; i++)
         {
             context.CancellationToken.ThrowIfCancellationRequested();
@@ -81,36 +120,16 @@ public static class BootstrapCommand
                 ReportProgress(context, i + 1, targets.Length, target, "resumed", clock.Elapsed);
                 continue;
             }
-            ReportProgress(context, i, targets.Length, target, "generating", clock.Elapsed);
-            string generation = "error", execution = "not-run";
-            string? proposal = null, error = null;
-            try
+            var item = generatedResults[target];
+            var generation = item.Generation;
+            var execution = "not-run";
+            var proposal = item.Proposal;
+            var error = item.Error;
+            if (generation == "ok" && proposal is not null && !context.Has("--generate-only"))
             {
-                using var generated = new StringWriter(CultureInfo.InvariantCulture);
-                var options = new Dictionary<string, string?>(StringComparer.Ordinal)
+                ReportProgress(context, i, targets.Length, target, "running", clock.Elapsed);
+                try
                 {
-                    ["--for"] = target,
-                };
-                if (context.Has("--debug")) options["--debug"] = null;
-                if (context.Options.TryGetValue("--out", out var requestedOutput))
-                    options["--out"] = requestedOutput;
-                var generateContext = context with
-                {
-                    Command = GenerateCommand.Definition,
-                    Options = options,
-                    Output = new CliOutput(generated, context.Output.Stderr, OutputFormat.Json),
-                    SharedProvider = provider,
-                    SharedModel = model,
-                };
-                var generationExit = GenerateCommand.Definition.Handler(generateContext);
-                var generationResponse = JsonNode.Parse(generated.ToString())!;
-                proposal = (string?)generationResponse["result"]?["path"];
-                generation = generationExit == ExitCodes.Success ? "ok" : "failed";
-                if (generationExit == ExitCodes.Success && proposal is null)
-                    throw new CliException("bootstrap.no_proposal", "Generation succeeded without a proposal path.");
-                if (generationExit == ExitCodes.Success && proposal is not null && !context.Has("--generate-only"))
-                {
-                    ReportProgress(context, i, targets.Length, target, "running", clock.Elapsed);
                     using var runOutput = new StringWriter(CultureInfo.InvariantCulture);
                     var runContext = context with
                     {
@@ -121,20 +140,16 @@ public static class BootstrapCommand
                     var runExit = RunCommand.Definition.Handler(runContext);
                     execution = runExit == ExitCodes.Success ? "passed" : "failed";
                 }
-                else if (generationExit != ExitCodes.Success)
-                    execution = "not-run";
+                catch (Exception ex) when (ex is CliException or InvalidOperationException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException)
+                {
+                    error = ex is CliException cli ? cli.Code + ": " + cli.Message : ex.Message;
+                    execution = "error";
+                }
             }
-            catch (Exception ex) when (ex is CliException or InvalidOperationException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException)
-            {
-                error = ex is CliException cli ? cli.Code + ": " + cli.Message : ex.Message;
-                execution = "error";
-                context.Output.Stderr.WriteLine($"Target {target}: {error}");
-            }
+            else if (generation == "error") execution = "error";
 
             if (generation == "ok" && (execution is "passed" or "not-run")) succeeded++;
-            else if (generation == "ok" && execution == "skipped") skipped++;
             else failed++;
-
             rows.Add(new JsonObject
             {
                 ["target"] = target,
@@ -161,6 +176,41 @@ public static class BootstrapCommand
             ["items"] = rows,
         }, text.ToString(), failed == 0 && skipped == 0 ? "ok" : "failed");
         return failed == 0 && skipped == 0 ? ExitCodes.Success : ExitCodes.ValidationFailed;
+    }
+
+    private sealed record BootstrapItem(string Target, string Generation, string? Proposal, string? Error, string Diagnostics, double Seconds);
+
+    private static BootstrapItem GenerateTarget(CommandContext context, RoslynContextProvider provider, ModelClient model, string target)
+    {
+        var timer = Stopwatch.StartNew();
+        using var generated = new StringWriter(CultureInfo.InvariantCulture);
+        using var diagnostics = new StringWriter(CultureInfo.InvariantCulture);
+        var options = new Dictionary<string, string?>(StringComparer.Ordinal) { ["--for"] = target };
+        if (context.Has("--debug")) options["--debug"] = null;
+        if (context.Options.TryGetValue("--out", out var output)) options["--out"] = output;
+        var inner = context with
+        {
+            Command = GenerateCommand.Definition,
+            Options = options,
+            Output = new CliOutput(generated, diagnostics, OutputFormat.Json),
+            SharedProvider = provider,
+            SharedModel = model,
+        };
+        try
+        {
+            var exit = GenerateCommand.Definition.Handler(inner);
+            var response = JsonNode.Parse(generated.ToString())!;
+            var proposal = (string?)response["result"]?["path"];
+            if (exit == ExitCodes.Success && proposal is null)
+                throw new CliException("bootstrap.no_proposal", "Generation succeeded without a proposal path.");
+            return new BootstrapItem(target, exit == ExitCodes.Success ? "ok" : "failed", proposal,
+                null, diagnostics.ToString(), timer.Elapsed.TotalSeconds);
+        }
+        catch (Exception ex) when (ex is CliException or InvalidOperationException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException)
+        {
+            var message = ex is CliException cli ? cli.Code + ": " + cli.Message : ex.Message;
+            return new BootstrapItem(target, "error", null, message, diagnostics.ToString(), timer.Elapsed.TotalSeconds);
+        }
     }
 
     private static void AppendRow(StringBuilder text, string target, string generation, string execution, string? proposal)
