@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -28,10 +29,17 @@ public static class BootstrapCommand
 
     private static int Run(CommandContext context)
     {
+        var clock = Stopwatch.StartNew();
         if (!context.Has("--all"))
             throw new CliException("usage", "bootstrap currently requires --all.");
         var root = context.PathArgument();
-        var targets = RoslynContextProvider.Load(root).DiscoverMethods();
+        var provider = RoslynContextProvider.Load(root);
+        var includedProjects = DocWizzProjectScope.Read(root);
+        var targets = provider.DiscoverMethods()
+            .Where(target => includedProjects is null
+                || (provider.GetContext(target, CliApp.Version).Project is { } project
+                    && includedProjects.Contains(project.Replace('\\', '/'))))
+            .ToArray();
         var config = ConfigCommand.Load(Path.Combine(root, TestWizzConfig.FileName));
         var outputDirectory = context.Options.TryGetValue("--out", out var custom) && !string.IsNullOrWhiteSpace(custom)
             ? Path.GetFullPath(custom, context.WorkingDirectory)
@@ -39,7 +47,7 @@ public static class BootstrapCommand
         ProposalBundle.EnsureOutsideRepository(root, outputDirectory);
         Directory.CreateDirectory(outputDirectory);
         var checkpoint = Path.Combine(outputDirectory, "bootstrap-checkpoint.json");
-        var fingerprint = Fingerprint(root, config, targets, context.Has("--generate-only"));
+        var fingerprint = Fingerprint(root, config, targets, context.Has("--generate-only"), includedProjects);
         var saved = context.Has("--resume") ? ReadCheckpoint(checkpoint, fingerprint) : new JsonArray();
         var completed = saved.OfType<JsonObject>()
             .Where(row => (string?)row["generation"] == "ok"
@@ -55,8 +63,8 @@ public static class BootstrapCommand
         var skipped = 0;
         var text = new StringBuilder("# Initial test baseline\n\n");
         text.Append("| Target | Generation | Execution | Proposal |\n|---|---|---|---|\n");
-        context.Output.Stderr.WriteLine($"Discovered {targets.Count} eligible C# method(s).");
-        for (var i = 0; i < targets.Count; i++)
+        context.Output.Stderr.WriteLine($"Discovered {targets.Length} eligible C# method(s){(includedProjects is null ? "" : " in " + includedProjects.Count + " DocWizz-scoped project(s)")}.");
+        for (var i = 0; i < targets.Length; i++)
         {
             context.CancellationToken.ThrowIfCancellationRequested();
             var target = targets[i];
@@ -67,10 +75,10 @@ public static class BootstrapCommand
                 succeeded++;
                 AppendRow(text, target, (string?)restored["generation"] ?? "ok",
                     (string?)restored["execution"] ?? "not-run", (string?)restored["proposal"]);
-                ReportProgress(context, i + 1, targets.Count, target, "resumed");
+                ReportProgress(context, i + 1, targets.Length, target, "resumed", clock.Elapsed);
                 continue;
             }
-            ReportProgress(context, i, targets.Count, target, "generating");
+            ReportProgress(context, i, targets.Length, target, "generating", clock.Elapsed);
             string generation = "error", execution = "not-run";
             string? proposal = null, error = null;
             try
@@ -96,7 +104,7 @@ public static class BootstrapCommand
                     throw new CliException("bootstrap.no_proposal", "Generation succeeded without a proposal path.");
                 if (generationExit == ExitCodes.Success && proposal is not null && !context.Has("--generate-only"))
                 {
-                    ReportProgress(context, i, targets.Count, target, "running");
+                    ReportProgress(context, i, targets.Length, target, "running", clock.Elapsed);
                     using var runOutput = new StringWriter(CultureInfo.InvariantCulture);
                     var runContext = context with
                     {
@@ -131,16 +139,16 @@ public static class BootstrapCommand
             });
             AppendRow(text, target, generation, execution, proposal);
             SaveCheckpoint(checkpoint, fingerprint, rows);
-            ReportProgress(context, i + 1, targets.Count, target, "complete");
+            ReportProgress(context, i + 1, targets.Length, target, "complete", clock.Elapsed);
         }
 
-        if (targets.Count == 0)
+        if (targets.Length == 0)
             context.Output.Stderr.WriteLine("No eligible C# methods discovered.");
-        text.Append(CultureInfo.InvariantCulture, $"\n{targets.Count} targets; {succeeded} successful, {failed} failed, {skipped} skipped. Proposals remain outside the repository; nothing was applied.\n");
+        text.Append(CultureInfo.InvariantCulture, $"\n{targets.Length} targets; {succeeded} successful, {failed} failed, {skipped} skipped. Proposals remain outside the repository; nothing was applied.\n");
         context.Output.Result("bootstrap", new JsonObject
         {
             ["schema"] = "testwizz.bootstrap/v1",
-            ["total"] = targets.Count,
+            ["total"] = targets.Length,
             ["succeeded"] = succeeded,
             ["failed"] = failed,
             ["skipped"] = skipped,
@@ -157,7 +165,7 @@ public static class BootstrapCommand
             .Append("|\n");
     }
 
-    private static string Fingerprint(string root, TestWizzConfig config, IReadOnlyList<string> targets, bool generateOnly)
+    private static string Fingerprint(string root, TestWizzConfig config, IReadOnlyList<string> targets, bool generateOnly, IReadOnlySet<string>? includedProjects)
     {
         // Include tracked C# contents, not only HEAD: dirty worktrees must invalidate resume.
         var files = Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
@@ -169,6 +177,7 @@ public static class BootstrapCommand
         Add(Path.GetFullPath(root));
         Add(ConfigJson.ToJson(config).ToJsonString());
         Add(generateOnly.ToString());
+        foreach (var project in (includedProjects ?? new HashSet<string>(StringComparer.Ordinal)).Order(StringComparer.Ordinal)) Add(project);
         foreach (var target in targets) Add(target);
         foreach (var file in files)
         {
@@ -223,23 +232,29 @@ public static class BootstrapCommand
         return options;
     }
 
-    private static void ReportProgress(CommandContext context, int completed, int total, string target, string phase)
+    // Match the 24-column, equals-filled stage bars used by DocWizz; keep CI logs free of control codes.
+    private static void ReportProgress(CommandContext context, int completed, int total, string target, string phase, TimeSpan elapsed)
     {
+        const int width = 24;
         var percent = total == 0 ? 100 : completed * 100 / total;
-        var width = 20;
         var filled = percent * width / 100;
-        var bar = new string('#', filled) + new string('-', width - filled);
+        var bar = new string('=', filled) + new string('-', width - filled);
+        var duration = elapsed.TotalHours >= 1
+            ? elapsed.ToString(@"h\:mm\:ss", CultureInfo.InvariantCulture)
+            : elapsed.ToString(@"m\:ss", CultureInfo.InvariantCulture);
         var writer = context.Output.Stderr;
-        if (ReferenceEquals(writer, Console.Error) && !Console.IsErrorRedirected)
+        var line = $"testwizz [{bar}] {percent,3}% ({completed}/{total}) {phase}: {target} ({duration})";
+        if (ReferenceEquals(writer, Console.Error) && !Console.IsErrorRedirected
+            && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CI"))
+            && Environment.GetEnvironmentVariable("TERM") != "dumb")
         {
             var maxWidth = Math.Max(20, Console.WindowWidth - 1);
-            var line = $"[{bar}] {percent,3}% ({completed}/{total}) {phase}: {target}";
             writer.Write("\r" + (line.Length > maxWidth ? line[..maxWidth] : line).PadRight(maxWidth));
             if (completed == total) writer.WriteLine();
         }
-        else
+        else if (phase is "complete" or "resumed")
         {
-            writer.WriteLine($"[{bar}] {percent,3}% ({completed}/{total}) {phase}: {target}");
+            writer.WriteLine(line);
         }
     }
 }

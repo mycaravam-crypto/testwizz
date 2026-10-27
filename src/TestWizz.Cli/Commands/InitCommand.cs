@@ -9,9 +9,9 @@ public static class InitCommand
 
     public static CommandDefinition Definition { get; } = new(
         "init",
-        $"Create a default {TestWizzConfig.FileName} in a directory.",
+        $"Create a default testwizz.yaml in a directory.",
         "testwizz init [path] [--force]",
-        Options: [new(ForceOption, $"Overwrite an existing {TestWizzConfig.FileName}.")],
+        Options: [new(ForceOption, $"Overwrite an existing testwizz.yaml.")],
         MaxArguments: 1,
         Handler: Run);
 
@@ -23,19 +23,19 @@ public static class InitCommand
             throw new CliException("path.not_found", $"Directory not found: {directory}");
         }
 
-        var file = Path.Combine(directory, TestWizzConfig.FileName);
-        var exists = File.Exists(file);
+        var file = Path.Combine(directory, "testwizz.yaml");
+        var legacy = Path.Combine(directory, TestWizzConfig.FileName);
+        var exists = File.Exists(file) || File.Exists(legacy);
         if (exists && !context.Has(ForceOption))
         {
             throw new CliException("config.exists", $"{file} already exists. Use --force to overwrite it.");
         }
 
-        var json = ConfigJson.ToJson(TestWizzConfig.Default).ToJsonString(CliOutput.JsonOptions) + "\n";
-        File.WriteAllText(file, json);
+        File.WriteAllText(file, TestWizzYaml.DefaultText + "\n");
 
         context.Output.Result(
             "init",
-            new JsonObject { ["path"] = file, ["overwritten"] = exists },
+            new JsonObject { ["path"] = file, ["overwritten"] = File.Exists(file) && context.Has(ForceOption) },
             $"{(exists ? "Overwrote" : "Created")} {file}\nEdit ai.endpoint and ai.model to match your local model server.\n");
         return ExitCodes.Success;
     }

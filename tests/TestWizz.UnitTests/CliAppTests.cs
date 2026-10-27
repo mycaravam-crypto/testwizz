@@ -11,6 +11,7 @@ public sealed class CliAppTests : IDisposable
     public void Dispose() => Directory.Delete(_directory, recursive: true);
 
     private string ConfigPath => Path.Combine(_directory, TestWizzConfig.FileName);
+    private string YamlPath => Path.Combine(_directory, "testwizz.yaml");
 
     private (int ExitCode, string Stdout, string Stderr) Run(params string[] args)
     {
@@ -70,6 +71,37 @@ public sealed class CliAppTests : IDisposable
     {
         public string Path { get; } = Directory.CreateTempSubdirectory("testwizz-bootstrap-output-").FullName;
         public void Dispose() => Directory.Delete(Path, recursive: true);
+    }
+
+    [Fact]
+    public void Bootstrap_DocWizzScopeRejectsUnknownProject()
+    {
+        File.WriteAllText(ConfigPath, """{ "version": 1 }""");
+        File.WriteAllText(Path.Combine(_directory, "docwizz.yaml"), """
+            scope:
+              projects:
+                include: [missing/Unknown.csproj]
+            """);
+        var (exit, stdout, _) = Run("bootstrap", "--all", "--generate-only", "--format", "json");
+        Assert.Equal(ExitCodes.Error, exit);
+        Assert.Equal("bootstrap.scope_invalid", (string)ParseJson(stdout)["error"]!["code"]!);
+    }
+
+    [Fact]
+    public void Bootstrap_DocWizzScopeAllowsExistingProjectWithNoMethods()
+    {
+        using var output = new TemporaryOutput();
+        File.WriteAllText(ConfigPath, """{ "version": 1 }""");
+        File.WriteAllText(Path.Combine(_directory, "Selected.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        File.WriteAllText(Path.Combine(_directory, "docwizz.yaml"), """
+            scope:
+              projects:
+                include:
+                  - Selected.csproj
+            """);
+        var (exit, stdout, _) = Run("bootstrap", "--all", "--generate-only", "--out", output.Path, "--format", "json");
+        Assert.Equal(ExitCodes.Success, exit);
+        Assert.Equal(0, (int)ParseJson(stdout)["result"]!["total"]!);
     }
 
     [Fact]
@@ -135,9 +167,9 @@ public sealed class CliAppTests : IDisposable
         Assert.Equal(ExitCodes.Success, exit);
         Assert.Empty(stderr);
         var result = ParseJson(stdout)["result"]!;
-        Assert.Equal(ConfigPath, (string)result["path"]!);
+        Assert.Equal(YamlPath, (string)result["path"]!);
         Assert.False((bool)result["overwritten"]!);
-        Assert.Equal(TestWizzConfig.Default, ConfigJson.Parse(File.ReadAllText(ConfigPath)).Config);
+        Assert.Equal(TestWizzConfig.Default, ConfigJson.Parse(TestWizz.Cli.Commands.TestWizzYaml.ToJson(File.ReadAllText(YamlPath))).Config);
     }
 
     [Fact]
@@ -161,7 +193,7 @@ public sealed class CliAppTests : IDisposable
         var (exit, _, _) = Run("init", "--force");
 
         Assert.Equal(ExitCodes.Success, exit);
-        Assert.True(ConfigJson.Parse(File.ReadAllText(ConfigPath)).IsValid);
+        Assert.True(ConfigJson.Parse(TestWizz.Cli.Commands.TestWizzYaml.ToJson(File.ReadAllText(YamlPath))).IsValid);
     }
 
     [Fact]
@@ -171,6 +203,29 @@ public sealed class CliAppTests : IDisposable
 
         Assert.Equal(ExitCodes.Error, exit);
         Assert.Contains("Directory not found", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Config_PrefersYamlOverLegacyJson()
+    {
+        File.WriteAllText(ConfigPath, """{ "version": 1, "ai": { "model": "legacy" } }""");
+        File.WriteAllText(YamlPath, """
+            version: 1
+            ai:
+              model: preferred
+            """);
+        var (exit, stdout, _) = Run("config", "--format", "json");
+        Assert.Equal(ExitCodes.Success, exit);
+        Assert.Equal("preferred", (string)ParseJson(stdout)["result"]!["config"]!["ai"]!["model"]!);
+    }
+
+    [Fact]
+    public void Config_StillAcceptsLegacyJson()
+    {
+        File.WriteAllText(ConfigPath, """{ "version": 1, "ai": { "model": "legacy" } }""");
+        var (exit, stdout, _) = Run("config", "--format", "json");
+        Assert.Equal(ExitCodes.Success, exit);
+        Assert.Equal("legacy", (string)ParseJson(stdout)["result"]!["config"]!["ai"]!["model"]!);
     }
 
     [Fact]
