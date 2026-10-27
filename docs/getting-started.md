@@ -4,7 +4,7 @@ Requirements: .NET 10 SDK, Node.js 22 for Vue fixtures, and Docker/Podman for ru
 
 ```sh
 dotnet restore
-npm ci --prefix fixtures/vue
+npm install --prefix fixtures/vue
 dotnet build -c Release
 dotnet test -c Release
 dotnet run --project src/TestWizz.Cli -- help
