@@ -35,6 +35,21 @@ public class CommandLineParserTests
     }
 
     [Fact]
+    public void GenerateBatch_ParsesAdaptiveWorkersAndDebug()
+    {
+        var parsed = Parse("generate", ".", "--since", "main", "--all-changed", "--max-workers", "3", "--debug", "--format", "json");
+        Assert.Equal("3", parsed.Options["--max-workers"]);
+        Assert.True(parsed.Options.ContainsKey("--debug"));
+        Assert.Equal(OutputFormat.Json, parsed.Format);
+    }
+
+    [Fact]
+    public void Bootstrap_ParsesDebug()
+    {
+        Assert.True(Parse("bootstrap", ".", "--all", "--debug").Options.ContainsKey("--debug"));
+    }
+
+    [Fact]
     public void DoubleDash_TreatsRestAsArguments()
     {
         Assert.Equal(["--odd-dir"], Parse("init", "--", "--odd-dir").Arguments);
