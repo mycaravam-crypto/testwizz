@@ -567,7 +567,7 @@ public sealed class RoslynContextProvider
                     ? SyntaxFactory.AccessorList([.. list.Accessors.Select(a => SyntaxFactory.AccessorDeclaration(a.Kind()).WithModifiers(a.Modifiers).WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken)))])
                     : SyntaxFactory.AccessorList([SyntaxFactory.AccessorDeclaration(SyntaxKind.GetAccessorDeclaration).WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken))])),
             EventDeclarationSyntax e => e.WithAttributeLists([]).WithAccessorList(null),
-            EventFieldDeclarationSyntax e => e.WithAttributeLists([]).WithSemicolonToken(default),
+            EventFieldDeclarationSyntax e => e.WithAttributeLists([]),
             TypeDeclarationSyntax t => t.WithAttributeLists([]).WithMembers([]).WithOpenBraceToken(default).WithCloseBraceToken(default).WithSemicolonToken(default).WithBaseList(t.BaseList),
             _ => node,
         };
