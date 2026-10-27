@@ -27,6 +27,7 @@ public static class BootstrapCommand
             new("--out", "Proposal directory outside the repository.", "dir"),
             new("--debug", "Print each generated test source to stderr (may contain sensitive source code)."),
             new("--max-workers", "Maximum adaptive generation workers (1-8; default 4).", "n"),
+            new("--progress-jsonl", "Emit structured bootstrap progress events on stderr."),
         ],
         MaxArguments: 1,
         Handler: Run);
@@ -41,13 +42,18 @@ public static class BootstrapCommand
         if (!context.Has("--all"))
             throw new CliException("usage", "bootstrap currently requires --all.");
         var root = context.PathArgument();
-        var provider = RoslynContextProvider.Load(root);
+        context.Output.Stderr.WriteLine("testwizz bootstrap: loading C# sources and building Roslyn context...");
+        context.CancellationToken.ThrowIfCancellationRequested();
+        var provider = RoslynContextProvider.Load(root, context.CancellationToken);
+        context.Output.Stderr.WriteLine($"testwizz bootstrap: Roslyn context ready ({clock.Elapsed.TotalSeconds:F1}s); discovering eligible methods...");
         var includedProjects = DocWizzProjectScope.Read(root);
-        var targets = provider.DiscoverMethods()
+        var targets = provider.DiscoverMethods(context.CancellationToken)
             .Where(target => includedProjects is null
                 || (provider.GetContext(target, CliApp.Version).Project is { } project
                     && includedProjects.Contains(project.Replace('\\', '/'))))
             .ToArray();
+        context.CancellationToken.ThrowIfCancellationRequested();
+        context.Output.Stderr.WriteLine($"testwizz bootstrap: discovery completed ({clock.Elapsed.TotalSeconds:F1}s); loading configuration...");
         var config = ConfigCommand.Load(Path.Combine(root, TestWizzConfig.FileName));
         using var model = ModelClient.Create(config.Ai, context.GetEnvironmentVariable);
         var outputDirectory = context.Options.TryGetValue("--out", out var custom) && !string.IsNullOrWhiteSpace(custom)
@@ -56,7 +62,9 @@ public static class BootstrapCommand
         ProposalBundle.EnsureOutsideRepository(root, outputDirectory);
         Directory.CreateDirectory(outputDirectory);
         var checkpoint = Path.Combine(outputDirectory, "bootstrap-checkpoint.json");
-        var fingerprint = Fingerprint(root, config, targets, context.Has("--generate-only"), includedProjects);
+        context.Output.Stderr.WriteLine("testwizz bootstrap: fingerprinting C# sources for safe resume...");
+        var fingerprint = Fingerprint(root, config, targets, context.Has("--generate-only"), includedProjects, context.CancellationToken);
+        context.Output.Stderr.WriteLine($"testwizz bootstrap: fingerprint ready ({clock.Elapsed.TotalSeconds:F1}s)");
         var saved = context.Has("--resume") ? ReadCheckpoint(checkpoint, fingerprint) : new JsonArray();
         var completed = saved.OfType<JsonObject>()
             .Where(row => (string?)row["generation"] == "ok"
@@ -73,6 +81,7 @@ public static class BootstrapCommand
         var text = new StringBuilder("# Initial test baseline\n\n");
         text.Append("| Target | Generation | Execution | Proposal |\n|---|---|---|---|\n");
         context.Output.Stderr.WriteLine($"Discovered {targets.Length} eligible C# method(s){(includedProjects is null ? "" : " in " + includedProjects.Count + " DocWizz-scoped project(s)")}.");
+        ProgressEvent(context, "discovered", targets.Length, 0, null, null, clock.Elapsed);
         var pending = targets.Where(target => !completed.ContainsKey(target)).ToArray();
         var generatedResults = new Dictionary<string, BootstrapItem>(StringComparer.Ordinal);
         var generationCheckpoint = new JsonArray();
@@ -88,6 +97,7 @@ public static class BootstrapCommand
             context.CancellationToken.ThrowIfCancellationRequested();
             var batch = pending.Skip(position).Take(workers).ToArray();
             var waveClock = Stopwatch.StartNew();
+            ProgressEvent(context, "generation-started", targets.Length, completed.Count + position, batch[0], null, clock.Elapsed);
             ReportProgress(context, completed.Count + position, targets.Length, batch[0], $"generating ({batch.Length} active)", clock.Elapsed);
             context.Output.Stderr.WriteLine($"testwizz bootstrap: started wave at {position + 1}/{pending.Length}, workers={batch.Length}, first={batch[0]}");
             var tasks = batch.Select(target => Task.Run(() => GenerateTarget(context, provider, model, target),
@@ -122,6 +132,7 @@ public static class BootstrapCommand
                 if (item.Diagnostics.Length > 0) context.Output.Stderr.Write(item.Diagnostics);
                 var done = completed.Count + position + batch.Length - remaining.Count;
                 ReportProgress(context, done, targets.Length, item.Target, "generated", clock.Elapsed);
+                ProgressEvent(context, "generated", targets.Length, done, item.Target, item.Generation, clock.Elapsed);
                 context.Output.Stderr.WriteLine($"testwizz bootstrap generated: {item.Target}: {item.Generation} ({item.Seconds:F1}s)");
             }
             waveClock.Stop();
@@ -147,6 +158,7 @@ public static class BootstrapCommand
                 AppendRow(text, target, (string?)restored["generation"] ?? "ok",
                     (string?)restored["execution"] ?? "not-run", (string?)restored["proposal"]);
                 ReportProgress(context, i + 1, targets.Length, target, "resumed", clock.Elapsed);
+                ProgressEvent(context, "resumed", targets.Length, i + 1, target, "ok", clock.Elapsed);
                 continue;
             }
             var item = generatedResults[target];
@@ -190,21 +202,44 @@ public static class BootstrapCommand
             AppendRow(text, target, generation, execution, proposal);
             SaveCheckpoint(checkpoint, fingerprint, rows);
             ReportProgress(context, i + 1, targets.Length, target, "complete", clock.Elapsed);
+            ProgressEvent(context, "finalized", targets.Length, i + 1, target, generation == "ok" && execution is "passed" or "not-run" ? "ok" : "failed", clock.Elapsed);
         }
 
         if (targets.Length == 0)
             context.Output.Stderr.WriteLine("No eligible C# methods discovered.");
         text.Append(CultureInfo.InvariantCulture, $"\n{targets.Length} targets; {succeeded} successful, {failed} failed, {skipped} skipped. Proposals remain outside the repository; nothing was applied.\n");
+        ProgressEvent(context, "finished", targets.Length, targets.Length, null, failed == 0 ? "ok" : "failed", clock.Elapsed);
         context.Output.Result("bootstrap", new JsonObject
         {
             ["schema"] = "testwizz.bootstrap/v1",
             ["total"] = targets.Length,
+            ["eligible"] = targets.Length,
+            ["resumed"] = completed.Count,
+            ["generationWorkersMax"] = maxWorkers,
             ["succeeded"] = succeeded,
             ["failed"] = failed,
             ["skipped"] = skipped,
             ["items"] = rows,
         }, text.ToString(), failed == 0 && skipped == 0 ? "ok" : "failed");
         return failed == 0 && skipped == 0 ? ExitCodes.Success : ExitCodes.ValidationFailed;
+    }
+
+    private static void ProgressEvent(CommandContext context, string phase, int total, int completed,
+        string? target, string? status, TimeSpan elapsed)
+    {
+        if (!context.Has("--progress-jsonl")) return;
+        var payload = new JsonObject
+        {
+            ["schema"] = "testwizz.bootstrap-progress/v1",
+            ["phase"] = phase,
+            ["total"] = total,
+            ["completed"] = completed,
+            ["percent"] = total == 0 ? 100 : Math.Min(100, completed * 100 / total),
+            ["target"] = target,
+            ["status"] = status,
+            ["elapsedSeconds"] = Math.Round(elapsed.TotalSeconds, 1),
+        };
+        context.Output.Stderr.WriteLine(payload.ToJsonString());
     }
 
     private sealed record BootstrapItem(string Target, string Generation, string? Proposal, string? Error, string Diagnostics, double Seconds);
@@ -250,7 +285,7 @@ public static class BootstrapCommand
             .Append("|\n");
     }
 
-    private static string Fingerprint(string root, TestWizzConfig config, IReadOnlyList<string> targets, bool generateOnly, IReadOnlySet<string>? includedProjects)
+    private static string Fingerprint(string root, TestWizzConfig config, IReadOnlyList<string> targets, bool generateOnly, IReadOnlySet<string>? includedProjects, CancellationToken cancellationToken)
     {
         // Include tracked C# contents, not only HEAD: dirty worktrees must invalidate resume.
         var files = Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
@@ -266,6 +301,7 @@ public static class BootstrapCommand
         foreach (var target in targets) Add(target);
         foreach (var file in files)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             Add(Path.GetRelativePath(root, file));
             hash.AppendData(File.ReadAllBytes(file));
         }

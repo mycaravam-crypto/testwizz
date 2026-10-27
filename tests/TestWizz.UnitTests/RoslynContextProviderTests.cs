@@ -63,7 +63,7 @@ public sealed class RoslynContextProviderTests : IDisposable
     }
 
     private ContextDocument Context(string target, int maxChars = RoslynContextProvider.DefaultMaxExcerptChars) =>
-        RoslynContextProvider.Load(_fixture).GetContext(target, "test", maxChars);
+        RoslynContextProvider.Load(_fixture, TestContext.Current.CancellationToken).GetContext(target, "test", maxChars);
 
     /// <summary>Set TESTWIZZ_UPDATE_GOLDEN=1 to rewrite the golden files after an intentional change.</summary>
     [Theory]
@@ -95,7 +95,7 @@ public sealed class RoslynContextProviderTests : IDisposable
     [Fact]
     public void Discovery_ReturnsDistinctOverloadSafeProductionMethods()
     {
-        var methods = RoslynContextProvider.Load(_fixture).DiscoverMethods();
+        var methods = RoslynContextProvider.Load(_fixture, TestContext.Current.CancellationToken).DiscoverMethods(TestContext.Current.CancellationToken);
         Assert.Contains("M:Shop.Calculator.Divide(System.Int32,System.Int32)", methods);
         Assert.Contains("M:Shop.Calculator.Percentage(System.Decimal,System.Int32)", methods);
         Assert.DoesNotContain(methods, id => id.Contains("CalculatorTests", StringComparison.Ordinal));
@@ -107,7 +107,7 @@ public sealed class RoslynContextProviderTests : IDisposable
     public void Context_IsDeterministic()
     {
         var first = ContextJson.ToJson(Context("OrderService")).ToJsonString();
-        var second = ContextJson.ToJson(RoslynContextProvider.Load(_fixture).GetContext("OrderService", "test")).ToJsonString();
+        var second = ContextJson.ToJson(RoslynContextProvider.Load(_fixture, TestContext.Current.CancellationToken).GetContext("OrderService", "test")).ToJsonString();
 
         Assert.Equal(first, second);
     }
@@ -215,7 +215,7 @@ public sealed class RoslynContextProviderTests : IDisposable
             }
             """);
 
-        var context = RoslynContextProvider.Load(repo).GetContext("Mapper.Map", "test");
+        var context = RoslynContextProvider.Load(repo, TestContext.Current.CancellationToken).GetContext("Mapper.Map", "test");
 
         Assert.Contains(context.Diagnostics, d => d.Code == "unresolved-type" && d.Message.Contains("JObject", StringComparison.Ordinal));
         var logger = context.Dependencies.Single(d => d.Role == "constructor");
@@ -235,7 +235,7 @@ public sealed class RoslynContextProviderTests : IDisposable
         Git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "fixture");
         var head = Git("rev-parse", "HEAD").Trim();
 
-        var provider = RoslynContextProvider.Load(_fixture);
+        var provider = RoslynContextProvider.Load(_fixture, TestContext.Current.CancellationToken);
 
         Assert.Equal(head, provider.GetContext("Calculator.Add", "test").Revision);
         Assert.Equal("target.not_found", Assert.Throws<ContextException>(() => provider.GetContext("IgnoredThing", "test")).Code);

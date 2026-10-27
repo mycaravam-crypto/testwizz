@@ -57,6 +57,14 @@ public class CommandLineParserTests
     }
 
     [Fact]
+    public void Bootstrap_ParsesJsonlProgressWithoutChangingJsonOutput()
+    {
+        var parsed = Parse("bootstrap", ".", "--all", "--progress-jsonl", "--format", "json");
+        Assert.True(parsed.Options.ContainsKey("--progress-jsonl"));
+        Assert.Equal(OutputFormat.Json, parsed.Format);
+    }
+
+    [Fact]
     public void DoubleDash_TreatsRestAsArguments()
     {
         Assert.Equal(["--odd-dir"], Parse("init", "--", "--odd-dir").Arguments);

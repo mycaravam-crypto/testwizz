@@ -105,7 +105,7 @@ public sealed class TestQualityTests : IDisposable
             {{body}}
             }
             """;
-        var provider = RoslynContextProvider.Load(_fixture);
+        var provider = RoslynContextProvider.Load(_fixture, TestContext.Current.CancellationToken);
         var context = provider.GetContext(target, "test");
         var extractor = new CSharpScenarioExtractor();
         var plan = ScenarioPlanner.Create(context, extractor.Version, extractor.Extract(context));
@@ -209,7 +209,7 @@ public sealed class TestQualityTests : IDisposable
     [Fact]
     public void CannedOutputs_HaveNoQualityFindings()
     {
-        var provider = RoslynContextProvider.Load(_fixture);
+        var provider = RoslynContextProvider.Load(_fixture, TestContext.Current.CancellationToken);
         foreach (var (target, code) in new[] { ("Calculator.Divide", CannedTests.Divide), ("OrderService.PlaceOrderAsync", CannedTests.PlaceOrder) })
         {
             var context = provider.GetContext(target, "test");

@@ -237,7 +237,7 @@ public sealed class CSharpScenarioExtractorTests : IDisposable
     [Fact]
     public void TypeTarget_IsRejectedWithMethodCandidates()
     {
-        var context = RoslynContextProvider.Load(_fixture).GetContext("Calculator", "test");
+        var context = RoslynContextProvider.Load(_fixture, TestContext.Current.CancellationToken).GetContext("Calculator", "test");
 
         var ex = Assert.Throws<ContextException>(() => _extractor.Extract(context));
 
@@ -248,7 +248,7 @@ public sealed class CSharpScenarioExtractorTests : IDisposable
     [Fact]
     public void Plan_RecordsContextHashAndExtractor()
     {
-        var context = RoslynContextProvider.Load(_fixture).GetContext("Calculator.Divide", "test");
+        var context = RoslynContextProvider.Load(_fixture, TestContext.Current.CancellationToken).GetContext("Calculator.Divide", "test");
         var plan = ScenarioPlanner.Create(context, _extractor.Version, _extractor.Extract(context));
 
         Assert.Equal(PlanJson.ContextHash(context), plan.ContextSha256);
@@ -276,7 +276,7 @@ public sealed class ScenarioEnricherTests : IAsyncLifetime
 
     private (ContextDocument Context, ExtractionResult Extraction) Extract(string target)
     {
-        var context = RoslynContextProvider.Load(_fixture).GetContext(target, "test");
+        var context = RoslynContextProvider.Load(_fixture, TestContext.Current.CancellationToken).GetContext(target, "test");
         return (context, new CSharpScenarioExtractor().Extract(context));
     }
 
