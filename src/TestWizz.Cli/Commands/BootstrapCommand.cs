@@ -80,8 +80,8 @@ public static class BootstrapCommand
                 {
                     ["--for"] = target,
                 };
-                if (context.Options.TryGetValue("--out", out var outputDirectory))
-                    options["--out"] = outputDirectory;
+                if (context.Options.TryGetValue("--out", out var requestedOutput))
+                    options["--out"] = requestedOutput;
                 var generateContext = context with
                 {
                     Command = GenerateCommand.Definition,
