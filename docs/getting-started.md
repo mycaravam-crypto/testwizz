@@ -73,3 +73,7 @@ scope:
 Without `docwizz.yaml` or without a `scope` block, TestWizz retains its normal repository-wide method discovery. An invalid or empty configured project list fails rather than silently scanning everything. Other valid project manifests (such as `package.json`, `.fsproj`, and `.vbproj`) can appear in the include array but do not produce C# targets in the current bootstrap command. The project scope is part of the resume fingerprint: changing the project selection requires starting a fresh scan without `--resume`.
 
 This is a **project selection filter**. DocWizz's additional `references`, `test_links`, and `unassigned_sources` policies are not interpreted by TestWizz.
+
+## Configuration filenames across Wizz tools
+
+Use `gitwizz.yaml`, `docwizz.yaml`, and `testwizz.yaml` as the common naming pattern. TestWizz now writes `testwizz.yaml` when you run `testwizz init .`; existing `testwizz.json` files still load unchanged. If both TestWizz filenames exist, `testwizz.yaml` wins. You can migrate by running `testwizz init . --force` only after saving your previous settings, then copying your model and output configuration into the YAML file. Do not delete your JSON configuration until `testwizz config .` succeeds.
