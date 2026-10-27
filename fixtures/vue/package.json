@@ -6,6 +6,7 @@
     "@vue/compiler-sfc": "3.5.44",
     "typescript": "7.0.2",
     "vue": "3.5.44",
-    "vue-router": "5.4.0"
+    "vue-router": "5.4.0",
+    "typescript-parser": "npm:typescript@5.9.3"
   }
 }
