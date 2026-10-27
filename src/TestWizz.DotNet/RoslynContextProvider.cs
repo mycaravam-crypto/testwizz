@@ -87,25 +87,43 @@ public sealed class RoslynContextProvider
     public IReadOnlyList<string> DiscoverMethods() => DiscoverMethods(CancellationToken.None);
 
     public IReadOnlyList<string> DiscoverMethods(CancellationToken cancellationToken) =>
-        [.. Candidates()
-            .Where(candidate => candidate.Node is MethodDeclarationSyntax method
-                && (method.Body is not null || method.ExpressionBody is not null)
-                && !method.Modifiers.Any(SyntaxKind.AbstractKeyword))
-            .Select(candidate => new
-            {
-                candidate.Id,
-                Symbol = DeclaredSymbol(candidate, cancellationToken),
-            })
-            .Where(item => item.Symbol?.DeclaredAccessibility is Accessibility.Public or Accessibility.Internal or Accessibility.ProtectedOrInternal)
-            .Select(item => item.Id)
-            .Where(id => id.StartsWith("M:", StringComparison.Ordinal))
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(id => id, StringComparer.Ordinal)];
+        DiscoverMethods(cancellationToken, null);
 
-    private ISymbol? DeclaredSymbol(Match candidate, CancellationToken cancellationToken)
+    /// <summary>Resolve only testable methods rather than semantically examining every type and member.</summary>
+    public IReadOnlyList<string> DiscoverMethods(CancellationToken cancellationToken, Action<int, int>? progress)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        return _compilation.GetSemanticModel(candidate.File.Tree).GetDeclaredSymbol(candidate.Node, cancellationToken);
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        var sourceFiles = _files.Where(file => !file.IsTest).ToArray();
+        var processed = 0;
+        foreach (var file in sourceFiles)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var methods = file.Tree.GetRoot(cancellationToken).DescendantNodes()
+                .OfType<MethodDeclarationSyntax>()
+                .Where(method => (method.Body is not null || method.ExpressionBody is not null)
+                    && !method.Modifiers.Any(SyntaxKind.AbstractKeyword)
+                    && !method.Modifiers.Any(SyntaxKind.PrivateKeyword)
+                    && (method.Modifiers.Any(SyntaxKind.PublicKeyword)
+                        || method.Modifiers.Any(SyntaxKind.InternalKeyword)
+                        || method.Modifiers.Any(SyntaxKind.ProtectedKeyword)
+                            && method.Modifiers.Any(SyntaxKind.InternalKeyword)))
+                .ToArray();
+            if (methods.Length > 0)
+            {
+                var model = _compilation.GetSemanticModel(file.Tree);
+                foreach (var method in methods)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (model.GetDeclaredSymbol(method, cancellationToken) is IMethodSymbol symbol
+                        && symbol.DeclaredAccessibility is Accessibility.Public or Accessibility.Internal or Accessibility.ProtectedOrInternal
+                        && symbol.GetDocumentationCommentId() is { } id
+                        && id.StartsWith("M:", StringComparison.Ordinal))
+                        ids.Add(id);
+                }
+            }
+            progress?.Invoke(++processed, sourceFiles.Length);
+        }
+        return [.. ids.OrderBy(id => id, StringComparer.Ordinal)];
     }
 
     /// <summary>Full path of the repository root the provider was loaded from.</summary>
