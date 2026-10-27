@@ -9,6 +9,6 @@ jobs:
   documentation:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check required documentation and local links
         run: python3 scripts/check-docs.py
