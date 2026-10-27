@@ -1,5 +1,7 @@
 using TestWizz.Core.Configuration;
 using TestWizz.Core.Running;
+using TestWizz.AI;
+using TestWizz.DotNet;
 
 namespace TestWizz.Cli;
 
@@ -24,7 +26,9 @@ public sealed record CommandContext(
     string WorkingDirectory,
     Func<string, string?> GetEnvironmentVariable,
     CancellationToken CancellationToken,
-    Func<ContainerRuntime, IContainerRuntime>? ContainerRuntimes = null)
+    Func<ContainerRuntime, IContainerRuntime>? ContainerRuntimes = null,
+    RoslynContextProvider? SharedProvider = null,
+    ModelClient? SharedModel = null)
 {
     /// <summary>The container runtime to use; tests replace it with a fake.</summary>
     public IContainerRuntime Runtime(ContainerRuntime runtime) =>
