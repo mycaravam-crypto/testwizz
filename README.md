@@ -34,7 +34,7 @@ testwizz bootstrap . --all --generate-only --debug
 
 - `--max-workers N` (1-8, default 4) applies to `generate --all-changed`. Work starts at one request, ramps up when end-to-end throughput is acceptable, and backs off when throughput falls more than 10% relative to the preceding wave. The measured performance depends on the model, server, and target complexity; validate with representative benchmarks.
 - The changed-code batch loads one Roslyn context provider and one reusable model client instead of reloading these per target.
-- `bootstrap --all` also reuses Roslyn and the model client, but remains sequential.
+- `bootstrap --all` uses adaptive concurrent generation with shared Roslyn and model clients; container test execution and checkpoint writes remain serialized.
 - `--debug` prints proposed C# test files to stderr, preserving JSON stdout. Generated code may contain confidential repository details; only enable it in trusted terminals or controlled logs. Debug output is grouped by target in concurrent batches.
 - Per-target elapsed seconds and each wave's throughput are reported for performance diagnosis. Proposals are still review-first and are not automatically applied.
 
