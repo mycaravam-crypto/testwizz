@@ -33,8 +33,8 @@ internal static class DocWizzProjectScope
                 if (value.StartsWith('/') || value.Contains('\\') || value.Contains(':')
                     || value.Contains('*') || value.Contains('?')
                     || value.Split('/').Any(part => part is "" or "." or "..")
-                    || !value.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
-                    throw new FormatException($"Invalid .NET project path '{value}' in scope.projects.include.");
+                    || !(value.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) || value.EndsWith("/package.json", StringComparison.Ordinal) || value == "package.json" || value.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase) || value.EndsWith(".vbproj", StringComparison.OrdinalIgnoreCase)))
+                    throw new FormatException($"Invalid project manifest path '{value}' in scope.projects.include.");
                 if (!File.Exists(Path.Combine(root, value.Replace('/', Path.DirectorySeparatorChar))))
                     throw new FormatException($"Scoped project '{value}' does not exist.");
                 if (!selected.Add(value))
