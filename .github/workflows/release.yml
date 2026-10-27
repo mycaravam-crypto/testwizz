@@ -1,0 +1,29 @@
+name: Package release
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --prefix fixtures/vue --no-audit --no-fund
+      - run: dotnet restore
+      - run: dotnet build -c Release --no-restore
+      - run: dotnet test -c Release --no-build
+      - run: dotnet pack src/TestWizz.Cli -c Release --no-build -o artifacts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: testwizz-nuget-package
+          path: artifacts/*.nupkg
+          if-no-files-found: error
