@@ -41,13 +41,18 @@ public static class BootstrapCommand
         if (!context.Has("--all"))
             throw new CliException("usage", "bootstrap currently requires --all.");
         var root = context.PathArgument();
-        var provider = RoslynContextProvider.Load(root);
+        context.Output.Stderr.WriteLine("testwizz bootstrap: loading C# sources and building Roslyn context...");
+        context.CancellationToken.ThrowIfCancellationRequested();
+        var provider = RoslynContextProvider.Load(root, context.CancellationToken);
+        context.Output.Stderr.WriteLine($"testwizz bootstrap: Roslyn context ready ({clock.Elapsed.TotalSeconds:F1}s); discovering eligible methods...");
         var includedProjects = DocWizzProjectScope.Read(root);
-        var targets = provider.DiscoverMethods()
+        var targets = provider.DiscoverMethods(context.CancellationToken)
             .Where(target => includedProjects is null
                 || (provider.GetContext(target, CliApp.Version).Project is { } project
                     && includedProjects.Contains(project.Replace('\\', '/'))))
             .ToArray();
+        context.CancellationToken.ThrowIfCancellationRequested();
+        context.Output.Stderr.WriteLine($"testwizz bootstrap: discovery completed ({clock.Elapsed.TotalSeconds:F1}s); loading configuration...");
         var config = ConfigCommand.Load(Path.Combine(root, TestWizzConfig.FileName));
         using var model = ModelClient.Create(config.Ai, context.GetEnvironmentVariable);
         var outputDirectory = context.Options.TryGetValue("--out", out var custom) && !string.IsNullOrWhiteSpace(custom)
@@ -56,7 +61,9 @@ public static class BootstrapCommand
         ProposalBundle.EnsureOutsideRepository(root, outputDirectory);
         Directory.CreateDirectory(outputDirectory);
         var checkpoint = Path.Combine(outputDirectory, "bootstrap-checkpoint.json");
-        var fingerprint = Fingerprint(root, config, targets, context.Has("--generate-only"), includedProjects);
+        context.Output.Stderr.WriteLine("testwizz bootstrap: fingerprinting C# sources for safe resume...");
+        var fingerprint = Fingerprint(root, config, targets, context.Has("--generate-only"), includedProjects, context.CancellationToken);
+        context.Output.Stderr.WriteLine($"testwizz bootstrap: fingerprint ready ({clock.Elapsed.TotalSeconds:F1}s)");
         var saved = context.Has("--resume") ? ReadCheckpoint(checkpoint, fingerprint) : new JsonArray();
         var completed = saved.OfType<JsonObject>()
             .Where(row => (string?)row["generation"] == "ok"
@@ -250,7 +257,7 @@ public static class BootstrapCommand
             .Append("|\n");
     }
 
-    private static string Fingerprint(string root, TestWizzConfig config, IReadOnlyList<string> targets, bool generateOnly, IReadOnlySet<string>? includedProjects)
+    private static string Fingerprint(string root, TestWizzConfig config, IReadOnlyList<string> targets, bool generateOnly, IReadOnlySet<string>? includedProjects, CancellationToken cancellationToken)
     {
         // Include tracked C# contents, not only HEAD: dirty worktrees must invalidate resume.
         var files = Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
@@ -266,6 +273,7 @@ public static class BootstrapCommand
         foreach (var target in targets) Add(target);
         foreach (var file in files)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             Add(Path.GetRelativePath(root, file));
             hash.AppendData(File.ReadAllBytes(file));
         }
