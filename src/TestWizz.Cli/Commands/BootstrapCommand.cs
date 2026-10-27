@@ -88,15 +88,27 @@ public static class BootstrapCommand
             context.CancellationToken.ThrowIfCancellationRequested();
             var batch = pending.Skip(position).Take(workers).ToArray();
             var waveClock = Stopwatch.StartNew();
+            ReportProgress(context, completed.Count + position, targets.Length, batch[0], $"generating ({batch.Length} active)", clock.Elapsed);
+            context.Output.Stderr.WriteLine($"testwizz bootstrap: started wave at {position + 1}/{pending.Length}, workers={batch.Length}, first={batch[0]}");
             var tasks = batch.Select(target => Task.Run(() => GenerateTarget(context, provider, model, target),
-                context.CancellationToken)).ToArray();
-            Task.WhenAll(tasks).GetAwaiter().GetResult();
-            waveClock.Stop();
-            foreach (var task in tasks)
+                context.CancellationToken)).ToList();
+            var remaining = new List<Task<BootstrapItem>>(tasks);
+            while (remaining.Count > 0)
             {
-                var item = task.Result;
+                context.CancellationToken.ThrowIfCancellationRequested();
+                var completion = Task.WhenAny(remaining);
+                // Wait at most 15 seconds between heartbeat messages even when an LLM is slow.
+                var heartbeat = Task.Delay(TimeSpan.FromSeconds(15), context.CancellationToken);
+                var winner = Task.WhenAny(completion, heartbeat).GetAwaiter().GetResult();
+                if (winner == heartbeat)
+                {
+                    context.Output.Stderr.WriteLine($"testwizz bootstrap: waiting on {remaining.Count} LLM request(s), {clock.Elapsed:mm\\:ss} elapsed; completed {completed.Count + position + batch.Length - remaining.Count}/{targets.Length}");
+                    continue;
+                }
+                var completedTask = completion.GetAwaiter().GetResult();
+                var item = completedTask.GetAwaiter().GetResult();
+                remaining.Remove(completedTask);
                 generatedResults[item.Target] = item;
-                // Checkpoint each wave in generate-only mode, so interruption preserves completed proposals.
                 generationCheckpoint.Add(new JsonObject
                 {
                     ["target"] = item.Target,
@@ -105,11 +117,14 @@ public static class BootstrapCommand
                     ["proposal"] = item.Proposal,
                     ["error"] = item.Error,
                 });
+                if (context.Has("--generate-only"))
+                    SaveCheckpoint(checkpoint, fingerprint, generationCheckpoint);
                 if (item.Diagnostics.Length > 0) context.Output.Stderr.Write(item.Diagnostics);
+                var done = completed.Count + position + batch.Length - remaining.Count;
+                ReportProgress(context, done, targets.Length, item.Target, "generated", clock.Elapsed);
                 context.Output.Stderr.WriteLine($"testwizz bootstrap generated: {item.Target}: {item.Generation} ({item.Seconds:F1}s)");
             }
-            if (context.Has("--generate-only"))
-                SaveCheckpoint(checkpoint, fingerprint, generationCheckpoint);
+            waveClock.Stop();
             position += batch.Length;
             var throughput = batch.Length / Math.Max(waveClock.Elapsed.TotalSeconds, 0.001);
             context.Output.Stderr.WriteLine($"testwizz bootstrap: workers={workers}, throughput={throughput:F3} targets/s");
