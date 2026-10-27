@@ -2,6 +2,38 @@
 
 TestWizz supports **Ollama** and local **OpenAI-compatible** endpoints (such as LM Studio, llama.cpp, or vLLM). The API key is optional when your local server does not require authentication.
 
+## Choose the protocol, not the model name
+
+The `ai.provider` setting selects **different HTTP APIs**. A model such as `nvidia-nemotron-30b` might be hosted behind either API, so its name alone cannot determine the correct provider.
+
+| | `ollama` | `openai-compatible` |
+| --- | --- | --- |
+| Typical server | Ollama native API | LM Studio, vLLM, llama.cpp, or an OpenAI API gateway |
+| Configured endpoint | Server root, e.g. `http://127.0.0.1:11434` | API base, e.g. `http://127.0.0.1:1234/v1` |
+| List models | `GET /api/tags` | `GET /models` |
+| Generate | `POST /api/chat` | `POST /chat/completions` |
+| Structured output | JSON schema in `format` | JSON schema in `response_format` |
+| Authorization | Optional bearer token | Optional bearer token, depending on server |
+
+TestWizz **appends** the API paths above to `ai.endpoint`. Do not include the full `/api/tags` or `/chat/completions` route in the configuration.
+
+For a reverse proxy at `https://ai.example.internal`:
+
+- If `https://ai.example.internal/api/tags` returns Ollama model JSON, set `provider: "ollama"` and `endpoint: "https://ai.example.internal"`.
+- If `https://ai.example.internal/api/v1/models` returns OpenAI-style JSON with a `data` array, set `provider: "openai-compatible"` and `endpoint: "https://ai.example.internal/api/v1"`.
+- A server may support both APIs. Choose the one whose **model listing and chat completion routes** work with that provider's response format.
+
+For a protected server, use your existing exported key when probing:
+
+```bash
+curl -sS -i -H "Authorization: Bearer $TESTWIZZ_AI_API_KEY" https://ai.example.internal/api/tags
+curl -sS -i -H "Authorization: Bearer $TESTWIZZ_AI_API_KEY" https://ai.example.internal/api/v1/models
+```
+
+Inspect the HTTP status, `Content-Type`, and response JSON structure without sharing credentials or sensitive model metadata. Do not use `curl -k` to bypass TLS verification.
+
+A `Server response is not valid JSON` error during the `model` step usually means the configured endpoint returned a non-JSON response, such as a proxy login page or wrong-route error. It **does not** establish that the model is missing. Fix the API path or proxy authentication first, then run `tw ai check .`.
+
 ## Ollama without an API key
 
 A typical local Ollama server does not require an API key. Set `ai.apiKeyEnv` to `null` (or omit it):
