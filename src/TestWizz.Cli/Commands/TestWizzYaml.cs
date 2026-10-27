@@ -32,7 +32,7 @@ internal static class TestWizzYaml
         return ConvertNode(yaml.Documents[0].RootNode).ToJsonString();
     }
 
-    private static JsonNode ConvertNode(YamlNode node) => node switch
+    private static JsonNode? ConvertNode(YamlNode node) => node switch
     {
         YamlMappingNode map => Map(map),
         YamlSequenceNode seq => new JsonArray([.. seq.Children.Select(ConvertNode)]),
@@ -54,7 +54,7 @@ internal static class TestWizzYaml
         return result;
     }
 
-    private static JsonNode? Scalar(YamlScalarNode scalar)
+    private static JsonValue? Scalar(YamlScalarNode scalar)
     {
         if (scalar.Style is YamlDotNet.Core.ScalarStyle.SingleQuoted or YamlDotNet.Core.ScalarStyle.DoubleQuoted)
             return JsonValue.Create(scalar.Value);
