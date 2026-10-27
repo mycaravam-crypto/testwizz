@@ -206,6 +206,9 @@ public static class BootstrapCommand
         {
             ["schema"] = "testwizz.bootstrap/v1",
             ["total"] = targets.Length,
+            ["eligible"] = targets.Length,
+            ["resumed"] = completed.Count,
+            ["generationWorkersMax"] = maxWorkers,
             ["succeeded"] = succeeded,
             ["failed"] = failed,
             ["skipped"] = skipped,
