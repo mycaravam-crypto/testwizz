@@ -8,76 +8,26 @@
     <Description>Generate reviewable unit tests for .NET and Vue applications with a local AI model.</Description>
   </PropertyGroup>
 
-  <!-- A tagged commit packs as vX.Y.Z; later commits pack as the next patch's dev build.
-       An explicit -p:Version always wins. Without Git tags use a monotonically increasing
-       commit-count prerelease, suitable for local tool updates. -->
   <Target Name="TestWizzGitVersion" BeforeTargets="GetAssemblyVersion;GenerateNuspec"
           Condition="'$(Version)' == '0.1.0' and '$(TestWizzDisableGitVersion)' != 'true'">
-    <Exec Command="git describe --tags --long --match &quot;v[0-9]*.[0-9]*.[0-9]*&quot;"
-          WorkingDirectory="$(MSBuildProjectDirectory)" ConsoleToMSBuild="true"
-          IgnoreExitCode="true" EchoOff="true" StandardOutputImportance="low">
+    <Exec Command="git describe --tags --long --match &quot;v[0-9]*.[0-9]*.[0-9]*&quot;" WorkingDirectory="$(MSBuildProjectDirectory)"
+          ConsoleToMSBuild="true" IgnoreExitCode="true" EchoOff="true" StandardOutputImportance="low">
       <Output TaskParameter="ConsoleOutput" PropertyName="_TwDescribe" />
       <Output TaskParameter="ExitCode" PropertyName="_TwDescribeExit" />
     </Exec>
     <Exec Command="git rev-list --count HEAD" WorkingDirectory="$(MSBuildProjectDirectory)"
-          ConsoleToMSBuild="true" IgnoreExitCode="true" EchoOff="true"
-          StandardOutputImportance="low">
-      <Output TaskParameter="ConsoleOutput" PropertyName="_TwCommitCount" />
+          ConsoleToMSBuild="true" IgnoreExitCode="true" EchoOff="true" StandardOutputImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_TwCount" />
       <Output TaskParameter="ExitCode" PropertyName="_TwCountExit" />
     </Exec>
     <PropertyGroup>
-      <_TwTag Condition="'$(_TwDescribeExit)' == '0' and $([System.Text.RegularExpressions.Regex]::IsMatch('$(_TwDescribe)', '^v\d+\.\d+\.\d+-\d+-g[0-9a-f]+    <ProjectReference Include="..\TestWizz.AI\TestWizz.AI.csproj" />
-    <ProjectReference Include="..\TestWizz.Core\TestWizz.Core.csproj" />
-    <ProjectReference Include="..\TestWizz.DotNet\TestWizz.DotNet.csproj" />
-    <InternalsVisibleTo Include="TestWizz.UnitTests" />
-    <EmbeddedResource Include="../../scripts/vue-context.mjs" LogicalName="vue-context.mjs" />
-    <EmbeddedResource Include="../../scripts/vue-ts-context.mjs" LogicalName="vue-ts-context.mjs" />
-  </ItemGroup>
-
-</Project>
-))">$([System.Text.RegularExpressions.Regex]::Replace('$(_TwDescribe)', '^v(\d+\.\d+\.\d+)-.*    <ProjectReference Include="..\TestWizz.AI\TestWizz.AI.csproj" />
-    <ProjectReference Include="..\TestWizz.Core\TestWizz.Core.csproj" />
-    <ProjectReference Include="..\TestWizz.DotNet\TestWizz.DotNet.csproj" />
-    <InternalsVisibleTo Include="TestWizz.UnitTests" />
-    <EmbeddedResource Include="../../scripts/vue-context.mjs" LogicalName="vue-context.mjs" />
-    <EmbeddedResource Include="../../scripts/vue-ts-context.mjs" LogicalName="vue-ts-context.mjs" />
-  </ItemGroup>
-
-</Project>
-, '$1'))</_TwTag>
-      <_TwMinor Condition="'$(_TwTag)' != ''">$([System.Text.RegularExpressions.Regex]::Replace('$(_TwTag)', '^([0-9]+\.[0-9]+)\..*    <ProjectReference Include="..\TestWizz.AI\TestWizz.AI.csproj" />
-    <ProjectReference Include="..\TestWizz.Core\TestWizz.Core.csproj" />
-    <ProjectReference Include="..\TestWizz.DotNet\TestWizz.DotNet.csproj" />
-    <InternalsVisibleTo Include="TestWizz.UnitTests" />
-    <EmbeddedResource Include="../../scripts/vue-context.mjs" LogicalName="vue-context.mjs" />
-    <EmbeddedResource Include="../../scripts/vue-ts-context.mjs" LogicalName="vue-ts-context.mjs" />
-  </ItemGroup>
-
-</Project>
-, '$1'))</_TwMinor>
-      <_TwPatch Condition="'$(_TwTag)' != ''">$([System.Text.RegularExpressions.Regex]::Replace('$(_TwTag)', '^.*\.([0-9]+)    <ProjectReference Include="..\TestWizz.AI\TestWizz.AI.csproj" />
-    <ProjectReference Include="..\TestWizz.Core\TestWizz.Core.csproj" />
-    <ProjectReference Include="..\TestWizz.DotNet\TestWizz.DotNet.csproj" />
-    <InternalsVisibleTo Include="TestWizz.UnitTests" />
-    <EmbeddedResource Include="../../scripts/vue-context.mjs" LogicalName="vue-context.mjs" />
-    <EmbeddedResource Include="../../scripts/vue-ts-context.mjs" LogicalName="vue-ts-context.mjs" />
-  </ItemGroup>
-
-</Project>
-, '$1'))</_TwPatch>
-      <_TwHeight Condition="'$(_TwTag)' != ''">$([System.Text.RegularExpressions.Regex]::Replace('$(_TwDescribe)', '^.*-(\d+)-g[0-9a-f]+    <ProjectReference Include="..\TestWizz.AI\TestWizz.AI.csproj" />
-    <ProjectReference Include="..\TestWizz.Core\TestWizz.Core.csproj" />
-    <ProjectReference Include="..\TestWizz.DotNet\TestWizz.DotNet.csproj" />
-    <InternalsVisibleTo Include="TestWizz.UnitTests" />
-    <EmbeddedResource Include="../../scripts/vue-context.mjs" LogicalName="vue-context.mjs" />
-    <EmbeddedResource Include="../../scripts/vue-ts-context.mjs" LogicalName="vue-ts-context.mjs" />
-  </ItemGroup>
-
-</Project>
-, '$1'))</_TwHeight>
+      <_TwTag Condition="'$(_TwDescribeExit)' == '0' and $([System.Text.RegularExpressions.Regex]::IsMatch('$(_TwDescribe)', '^v\d+\.\d+\.\d+-\d+-g[0-9a-f]+$'))">$([System.Text.RegularExpressions.Regex]::Replace('$(_TwDescribe)', '^v(\d+\.\d+\.\d+)-.*$', '$1'))</_TwTag>
+      <_TwMinor Condition="'$(_TwTag)' != ''">$([System.Text.RegularExpressions.Regex]::Replace('$(_TwTag)', '^(\d+\.\d+)\..*$', '$1'))</_TwMinor>
+      <_TwPatch Condition="'$(_TwTag)' != ''">$([System.Text.RegularExpressions.Regex]::Replace('$(_TwTag)', '^.*\.(\d+)$', '$1'))</_TwPatch>
+      <_TwHeight Condition="'$(_TwTag)' != ''">$([System.Text.RegularExpressions.Regex]::Replace('$(_TwDescribe)', '^.*-(\d+)-g[0-9a-f]+$', '$1'))</_TwHeight>
       <Version Condition="'$(_TwTag)' != '' and '$(_TwHeight)' == '0'">$(_TwTag)</Version>
       <Version Condition="'$(_TwTag)' != '' and '$(_TwHeight)' != '0'">$(_TwMinor).$([MSBuild]::Add($(_TwPatch), 1))-dev.$(_TwHeight)</Version>
-      <Version Condition="'$(_TwTag)' == '' and '$(_TwCountExit)' == '0' and '$(_TwCommitCount)' != ''">0.1.1-dev.$(_TwCommitCount)</Version>
+      <Version Condition="'$(_TwTag)' == '' and '$(_TwCountExit)' == '0' and '$(_TwCount)' != ''">0.1.1-dev.$(_TwCount)</Version>
       <PackageVersion>$(Version)</PackageVersion>
     </PropertyGroup>
   </Target>
