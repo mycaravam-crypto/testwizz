@@ -75,6 +75,9 @@ public static class BootstrapCommand
         context.Output.Stderr.WriteLine($"Discovered {targets.Length} eligible C# method(s){(includedProjects is null ? "" : " in " + includedProjects.Count + " DocWizz-scoped project(s)")}.");
         var pending = targets.Where(target => !completed.ContainsKey(target)).ToArray();
         var generatedResults = new Dictionary<string, BootstrapItem>(StringComparer.Ordinal);
+        var generationCheckpoint = new JsonArray();
+        foreach (var entry in completed.Values)
+            generationCheckpoint.Add(entry.DeepClone());
         var workers = 1;
         double previousThroughput = 0;
         var position = 0;
@@ -93,9 +96,20 @@ public static class BootstrapCommand
             {
                 var item = task.Result;
                 generatedResults[item.Target] = item;
+                // Checkpoint each wave in generate-only mode, so interruption preserves completed proposals.
+                generationCheckpoint.Add(new JsonObject
+                {
+                    ["target"] = item.Target,
+                    ["generation"] = item.Generation,
+                    ["execution"] = "not-run",
+                    ["proposal"] = item.Proposal,
+                    ["error"] = item.Error,
+                });
                 if (item.Diagnostics.Length > 0) context.Output.Stderr.Write(item.Diagnostics);
                 context.Output.Stderr.WriteLine($"testwizz bootstrap generated: {item.Target}: {item.Generation} ({item.Seconds:F1}s)");
             }
+            if (context.Has("--generate-only"))
+                SaveCheckpoint(checkpoint, fingerprint, generationCheckpoint);
             position += batch.Length;
             var throughput = batch.Length / Math.Max(waveClock.Elapsed.TotalSeconds, 0.001);
             context.Output.Stderr.WriteLine($"testwizz bootstrap: workers={workers}, throughput={throughput:F3} targets/s");
