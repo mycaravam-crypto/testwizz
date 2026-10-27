@@ -23,6 +23,7 @@ public static class BootstrapCommand
             new("--generate-only", "Skip container execution; only generate proposals."),
             new("--resume", "Continue a matching scan, skipping previously successful targets."),
             new("--out", "Proposal directory outside the repository.", "dir"),
+            new("--debug", "Print each generated test source to stderr (may contain sensitive source code)."),
         ],
         MaxArguments: 1,
         Handler: Run);
@@ -88,6 +89,7 @@ public static class BootstrapCommand
                 {
                     ["--for"] = target,
                 };
+                if (context.Has("--debug")) options["--debug"] = null;
                 if (context.Options.TryGetValue("--out", out var requestedOutput))
                     options["--out"] = requestedOutput;
                 var generateContext = context with
