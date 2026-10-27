@@ -232,7 +232,7 @@ if (descriptor.template) {
           const absoluteOffset = templateStartOffset + prop.loc.start.offset;
           templateEvents.push({
             name: prop.arg.content,
-            line: source.slice(0, absoluteOffset).split(/\\n/).length,
+            line: source.slice(0, absoluteOffset).split(/\n/).length,
             handler: prop.exp?.content ?? ''
           });
         }
