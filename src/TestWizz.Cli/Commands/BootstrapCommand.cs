@@ -42,11 +42,17 @@ public static class BootstrapCommand
         if (!context.Has("--all"))
             throw new CliException("usage", "bootstrap currently requires --all.");
         var root = context.PathArgument();
-        context.Output.Stderr.WriteLine("testwizz bootstrap: loading C# sources and building Roslyn context...");
-        context.CancellationToken.ThrowIfCancellationRequested();
-        var provider = RoslynContextProvider.Load(root, context.CancellationToken);
-        context.Output.Stderr.WriteLine($"testwizz bootstrap: Roslyn context ready ({clock.Elapsed.TotalSeconds:F1}s); discovering eligible methods...");
+        // Read the DocWizz scope before loading Roslyn. Excluded project sources must never be parsed.
         var includedProjects = DocWizzProjectScope.Read(root);
+        context.Output.Stderr.WriteLine(includedProjects is null
+            ? "testwizz bootstrap: loading C# sources and building Roslyn context..."
+            : $"testwizz bootstrap: loading only {includedProjects.Count} DocWizz-scoped project(s)...");
+        context.CancellationToken.ThrowIfCancellationRequested();
+        var includeFile = includedProjects is null ? null : ScopedSourceFilter(root, includedProjects);
+        var provider = includeFile is null
+            ? RoslynContextProvider.Load(root, context.CancellationToken)
+            : RoslynContextProvider.Load(root, includeFile, context.CancellationToken);
+        context.Output.Stderr.WriteLine($"testwizz bootstrap: Roslyn context ready ({clock.Elapsed.TotalSeconds:F1}s); discovering eligible methods...");
         var discoveryClock = Stopwatch.StartNew();
         var lastDiscoveryReport = TimeSpan.Zero;
         var targets = provider.DiscoverMethods((done, total) =>
@@ -247,6 +253,33 @@ public static class BootstrapCommand
             ["elapsedSeconds"] = Math.Round(elapsed.TotalSeconds, 1),
         };
         context.Output.Stderr.WriteLine(payload.ToJsonString());
+    }
+
+    // Nearest .csproj wins, including when project directories are nested. Cache each
+    // directory's owning project so large repositories do not repeatedly scan manifests.
+    private static Func<string, bool> ScopedSourceFilter(string root, IReadOnlySet<string> projects)
+    {
+        var owners = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var rootFull = Path.GetFullPath(root);
+        string? Owner(string directory)
+        {
+            if (owners.TryGetValue(directory, out var cached)) return cached;
+            string? result = null;
+            var relative = Path.GetRelativePath(rootFull, directory);
+            if (relative != ".." && !relative.StartsWith("../", StringComparison.Ordinal)
+                && !relative.StartsWith("..\\", StringComparison.Ordinal))
+            {
+                result = Directory.EnumerateFiles(directory, "*.csproj")
+                    .Select(project => Path.GetRelativePath(rootFull, project).Replace('\\', '/'))
+                    .OrderBy(name => name, StringComparer.Ordinal)
+                    .FirstOrDefault();
+                if (result is null && !Path.GetFullPath(directory).Equals(rootFull, StringComparison.OrdinalIgnoreCase))
+                    result = Owner(Path.GetDirectoryName(directory)!);
+            }
+            owners[directory] = result;
+            return result;
+        }
+        return relative => projects.Contains(Owner(Path.GetDirectoryName(Path.Combine(rootFull, relative))!) ?? "");
     }
 
     private sealed record BootstrapItem(string Target, string Generation, string? Proposal, string? Error, string Diagnostics, double Seconds);
