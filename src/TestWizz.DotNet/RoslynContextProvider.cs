@@ -87,10 +87,10 @@ public sealed class RoslynContextProvider
     public IReadOnlyList<string> DiscoverMethods() => DiscoverMethods(CancellationToken.None);
 
     public IReadOnlyList<string> DiscoverMethods(CancellationToken cancellationToken) =>
-        DiscoverMethods(cancellationToken, null);
+        DiscoverMethods(null, cancellationToken);
 
     /// <summary>Resolve only testable methods rather than semantically examining every type and member.</summary>
-    public IReadOnlyList<string> DiscoverMethods(CancellationToken cancellationToken, Action<int, int>? progress)
+    public IReadOnlyList<string> DiscoverMethods(Action<int, int>? progress, CancellationToken cancellationToken)
     {
         var ids = new HashSet<string>(StringComparer.Ordinal);
         var sourceFiles = _files.Where(file => !file.IsTest).ToArray();
