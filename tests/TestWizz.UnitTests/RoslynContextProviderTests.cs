@@ -113,6 +113,9 @@ public sealed class RoslynContextProviderTests : IDisposable
         var provider = RoslynContextProvider.Load(_fixture,
             relative => relative.Replace('\\', '/').StartsWith("src/Shop/", StringComparison.Ordinal), token);
         var methods = provider.DiscoverMethods(token);
+        Assert.NotEmpty(provider.SourceHashes);
+        Assert.All(provider.SourceHashes, source => Assert.StartsWith("src/Shop/", source.Path, StringComparison.Ordinal));
+        Assert.All(provider.SourceHashes, source => Assert.Equal(64, source.Sha256.Length));
 
         Assert.Contains("M:Shop.Calculator.Divide(System.Int32,System.Int32)", methods);
         Assert.DoesNotContain(methods, id => id.Contains("Tests.", StringComparison.Ordinal));
