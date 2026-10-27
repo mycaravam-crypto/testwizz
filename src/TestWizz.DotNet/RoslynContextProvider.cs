@@ -47,13 +47,14 @@ public sealed class RoslynContextProvider
     private readonly IReadOnlyList<SourceFile> _files;
     private readonly List<ContextDiagnostic> _loadDiagnostics = [];
 
-    private RoslynContextProvider(string root, CancellationToken cancellationToken)
+    private RoslynContextProvider(string root, Func<string, bool>? includeFile, CancellationToken cancellationToken)
     {
         _root = root;
         var files = new List<SourceFile>();
         foreach (var relative in RepositoryFiles.CSharpFiles(root))
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (includeFile is not null && !includeFile(relative)) continue;
             var full = Path.Combine(root, relative);
             var info = new FileInfo(full);
             if (info.Length > RepositoryFiles.MaxFileBytes)
@@ -80,7 +81,11 @@ public sealed class RoslynContextProvider
 
     public static RoslynContextProvider Load(string root) => Load(root, CancellationToken.None);
 
-    public static RoslynContextProvider Load(string root, CancellationToken cancellationToken) => new(Path.GetFullPath(root), cancellationToken);
+    public static RoslynContextProvider Load(string root, CancellationToken cancellationToken) => new(Path.GetFullPath(root), null, cancellationToken);
+
+    /// <summary>Load only source files selected before parsing or compilation.</summary>
+    public static RoslynContextProvider Load(string root, Func<string, bool> includeFile, CancellationToken cancellationToken) =>
+        new(Path.GetFullPath(root), includeFile, cancellationToken);
 
     /// <summary>Discover eligible named C# methods, excluding test files and declarations without bodies.</summary>
     /// <remarks>Documentation IDs are stable, overload-safe targets for GetContext.</remarks>
