@@ -4,8 +4,11 @@
     <Project Path="src/TestWizz.Cli/TestWizz.Cli.csproj" />
     <Project Path="src/TestWizz.Core/TestWizz.Core.csproj" />
     <Project Path="src/TestWizz.DotNet/TestWizz.DotNet.csproj" />
+    <Project Path="src/TestWizz.Vue/TestWizz.Vue.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/TestWizz.UnitTests/TestWizz.UnitTests.csproj" />
+    <Project Path="tests/TestWizz.IntegrationTests/TestWizz.IntegrationTests.csproj" />
+    <Project Path="tests/TestWizz.E2ETests/TestWizz.E2ETests.csproj" />
   </Folder>
 </Solution>

@@ -1,0 +1,48 @@
+name: Security
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '27 4 * * 1'
+permissions:
+  contents: read
+jobs:
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Restore .NET dependencies
+        run: dotnet restore
+      - name: Check NuGet vulnerabilities
+        run: dotnet list package --vulnerable --include-transitive
+      - name: Audit Vue dependencies
+        run: |
+          npm install --prefix fixtures/vue --ignore-scripts --no-audit --no-fund
+          npm audit --prefix fixtures/vue --audit-level=high
+  codeql:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      matrix:
+        language: [csharp, javascript-typescript]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+      - if: matrix.language == 'csharp'
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - if: matrix.language == 'csharp'
+        run: dotnet build -c Release
+      - uses: github/codeql-action/analyze@v3

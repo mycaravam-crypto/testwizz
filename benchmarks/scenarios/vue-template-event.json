@@ -1,0 +1,14 @@
+{
+  "schema": "testwizz.benchmark-case/v1",
+  "name": "static-vue-template-event-location",
+  "target": "fixtures/vue/src/components/CartItem.vue",
+  "expected": {
+    "event": "click",
+    "handler": "emit('select', count)",
+    "line": 25
+  },
+  "limitations": [
+    "No runtime reachability inference",
+    "No AI test generation"
+  ]
+}
