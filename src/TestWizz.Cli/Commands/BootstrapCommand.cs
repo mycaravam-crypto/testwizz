@@ -47,7 +47,14 @@ public static class BootstrapCommand
         var provider = RoslynContextProvider.Load(root, context.CancellationToken);
         context.Output.Stderr.WriteLine($"testwizz bootstrap: Roslyn context ready ({clock.Elapsed.TotalSeconds:F1}s); discovering eligible methods...");
         var includedProjects = DocWizzProjectScope.Read(root);
-        var targets = provider.DiscoverMethods(context.CancellationToken)
+        var discoveryClock = Stopwatch.StartNew();
+        var lastDiscoveryReport = TimeSpan.Zero;
+        var targets = provider.DiscoverMethods(context.CancellationToken, (done, total) =>
+            {
+                if (discoveryClock.Elapsed - lastDiscoveryReport < TimeSpan.FromSeconds(2) && done != total) return;
+                lastDiscoveryReport = discoveryClock.Elapsed;
+                context.Output.Stderr.WriteLine($"testwizz bootstrap: discovering methods: {done}/{total} source files ({discoveryClock.Elapsed.TotalSeconds:F1}s)");
+            })
             .Where(target => includedProjects is null
                 || (provider.GetContext(target, CliApp.Version).Project is { } project
                     && includedProjects.Contains(project.Replace('\\', '/'))))
