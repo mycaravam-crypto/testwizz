@@ -193,6 +193,30 @@ public sealed class RoslynContextProviderTests : IDisposable
     }
 
     [Fact]
+    public void EventFieldDependency_DoesNotThrowOnSignature()
+    {
+        var path = Path.Combine(_fixture, "src", "Shop", "EventPublisher.cs");
+        File.WriteAllText(path, """
+            namespace Shop;
+            public class EventPublisher
+            {
+                public event System.EventHandler? Changed;
+                public void Trigger() => Changed?.Invoke(this, System.EventArgs.Empty);
+            }
+            public class EventSubscriber(EventPublisher publisher)
+            {
+                public void Subscribe() => publisher.Trigger();
+            }
+            """);
+
+        var context = Context("EventSubscriber.Subscribe");
+
+        Assert.Contains(context.Dependencies, dependency =>
+            dependency.Members.Any(member => member.Contains("event", StringComparison.Ordinal)
+                && member.Contains("Changed", StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public void RecordDependencies_IncludePrimaryConstructor()
     {
         var line = Context("OrderService.PlaceOrderAsync").Dependencies.Single(d => d.Role == "parameter");
