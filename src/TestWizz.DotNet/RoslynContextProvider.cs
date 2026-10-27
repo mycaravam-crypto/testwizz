@@ -131,6 +131,10 @@ public sealed class RoslynContextProvider
         return [.. ids.OrderBy(id => id, StringComparer.Ordinal)];
     }
 
+    /// <summary>Source paths and hashes actually parsed by this provider (including scoped selections).</summary>
+    public IReadOnlyList<(string Path, string Sha256)> SourceHashes =>
+        [.. _files.Select(file => (file.Path, file.Sha256)).OrderBy(file => file.Path, StringComparer.Ordinal)];
+
     /// <summary>Full path of the repository root the provider was loaded from.</summary>
     public string Root => _root;
 
