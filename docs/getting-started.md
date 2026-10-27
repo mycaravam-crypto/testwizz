@@ -71,7 +71,7 @@ Use this only when you intend to replace your installed version. The Git-derived
 
 ### Respect DocWizz project scope
 
-When `docwizz.yaml` exists in the target repository and contains `scope.projects.include`, `tw bootstrap . --all` generates tests **only for C# methods owned by those listed .NET projects**. Paths must name existing `.csproj` manifests relative to the scan root (case-sensitive, using `/`), for example:
+When `docwizz.yaml` exists in the target repository and contains `scope.projects.include`, `tw bootstrap . --all` **loads and analyzes only the C# sources owned by those listed .NET projects**, instead of parsing the whole repository before filtering. Nested project directories use the nearest `.csproj` as owner. This reduces Roslyn startup and discovery work in large repositories. Paths must name existing `.csproj` manifests relative to the scan root (case-sensitive, using `/`), for example:
 
 ```yaml
 scope:
