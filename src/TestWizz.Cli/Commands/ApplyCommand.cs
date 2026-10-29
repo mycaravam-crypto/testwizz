@@ -16,7 +16,7 @@ public static class ApplyCommand
     public static CommandDefinition Definition { get; } = new(
         "apply",
         "Copy a proposal's test files into the repository after checking that its sources are unchanged, its last run passed and no file would be overwritten. Nothing is committed.",
-        "testwizz apply [path] (--proposal <id|dir> | --all --verified-only) [--allow-unverified] [--out <dir>]",
+        "testwizz apply [path] (--proposal <id|dir> | --all (--verified-only | --allow-unverified)) [--allow-unverified] [--out <dir>]",
         Options:
         [
             new(ProposalOption, "Proposal id (a folder in the output directory) or the bundle directory itself.", "id"),
@@ -34,8 +34,8 @@ public static class ApplyCommand
         var verifiedOnly = context.Has(VerifiedOnlyOption);
         var allowUnverified = context.Has(AllowUnverifiedOption);
         var hasProposal = context.Options.TryGetValue(ProposalOption, out var reference) && !string.IsNullOrWhiteSpace(reference);
-        if (all && (hasProposal || !verifiedOnly || allowUnverified))
-            throw new CliException("usage", "--all requires --verified-only and cannot be combined with --proposal or --allow-unverified.");
+        if (all && (hasProposal || verifiedOnly == allowUnverified))
+            throw new CliException("usage", "--all requires exactly one of --verified-only or --allow-unverified and cannot be combined with --proposal.");
         if (!all && (verifiedOnly || !hasProposal))
             throw new CliException("usage", $"Use {Definition.Usage}");
 
@@ -46,7 +46,7 @@ public static class ApplyCommand
             : Path.GetFullPath(config.Output, root);
 
         if (all)
-            return ApplyAll(context, root, output);
+            return ApplyAll(context, root, output, allowUnverified);
 
         IReadOnlyList<string> files;
         LoadedProposal proposal;
@@ -78,7 +78,7 @@ public static class ApplyCommand
             text.ToString());
         return ExitCodes.Success;
     }
-    private static int ApplyAll(CommandContext context, string root, string output)
+    private static int ApplyAll(CommandContext context, string root, string output, bool allowUnverified)
     {
         if (!Directory.Exists(output))
             throw new CliException("apply.output_not_found", $"Proposal directory does not exist: {output}");
@@ -88,7 +88,7 @@ public static class ApplyCommand
         var skipped = 0;
         var conflicted = 0;
         var filesApplied = 0;
-        var text = new StringBuilder("Batch apply (verified proposals only):\n");
+        var text = new StringBuilder(allowUnverified ? "Batch apply (unverified proposals allowed):\n" : "Batch apply (verified proposals only):\n");
 
         // Stable order makes the first proposal win when two proposals target the same file.
         foreach (var directory in Directory.EnumerateDirectories(output).OrderBy(p => p, StringComparer.Ordinal))
@@ -103,7 +103,7 @@ public static class ApplyCommand
             {
                 var proposal = ProposalReader.Load(directory);
                 id = proposal.Id;
-                files = ProposalApplier.Apply(root, proposal, allowUnverified: false);
+                files = ProposalApplier.Apply(root, proposal, allowUnverified);
                 status = "applied";
                 applied++;
                 filesApplied += files.Count;
