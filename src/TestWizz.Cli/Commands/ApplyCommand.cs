@@ -88,7 +88,7 @@ public static class ApplyCommand
         var skipped = 0;
         var conflicted = 0;
         var filesApplied = 0;
-        var text = new StringBuilder("Batch apply (verified proposals only):\\n");
+        var text = new StringBuilder("Batch apply (verified proposals only):\n");
 
         // Stable order makes the first proposal win when two proposals target the same file.
         foreach (var directory in Directory.EnumerateDirectories(output).OrderBy(p => p, StringComparer.Ordinal))
@@ -138,11 +138,11 @@ public static class ApplyCommand
             });
             text.Append("  ").Append(status).Append(": ").Append(id);
             if (reason is not null) text.Append(" (").Append(reason).Append(')');
-            text.Append('\\n');
+            text.Append('\n');
         }
 
-        text.Append($"Summary: {applied} applied, {skipped} skipped, {conflicted} conflicted; {filesApplied} files added.\\n");
-        text.Append("Nothing was committed. Review with 'git status' and 'git diff'.\\n");
+        text.Append($"Summary: {applied} applied, {skipped} skipped, {conflicted} conflicted; {filesApplied} files added.\n");
+        text.Append("Nothing was committed. Review with 'git status' and 'git diff'.\n");
         context.Output.Result("apply", new JsonObject
         {
             ["schema"] = "testwizz.apply-batch/v1",
