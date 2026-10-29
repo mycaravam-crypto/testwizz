@@ -5,6 +5,7 @@ namespace TestWizz.UnitTests;
 
 public sealed class ApplyBatchTests : IDisposable
 {
+    private static readonly string[] CommandPrefix = ["apply", "--format", "json"];
     private readonly string _root = Directory.CreateTempSubdirectory("testwizz-apply-batch-").FullName;
     private string Output => Path.Combine(_root, "proposals");
 
@@ -14,7 +15,7 @@ public sealed class ApplyBatchTests : IDisposable
     {
         using var stdout = new StringWriter();
         using var stderr = new StringWriter();
-        var arguments = new[] { "apply", "--format", "json" }.Concat(options).ToArray();
+        var arguments = CommandPrefix.Concat(options).ToArray();
         var exit = new CliApp(stdout, stderr, _root).Run(arguments);
         return (exit, JsonNode.Parse(stdout.ToString())!.AsObject());
     }
