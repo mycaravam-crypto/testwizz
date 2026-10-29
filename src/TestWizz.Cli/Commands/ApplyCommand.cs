@@ -141,7 +141,7 @@ public static class ApplyCommand
             text.Append('\n');
         }
 
-        text.Append($"Summary: {applied} applied, {skipped} skipped, {conflicted} conflicted; {filesApplied} files added.\n");
+        text.Append(System.Globalization.CultureInfo.InvariantCulture, $"Summary: {applied} applied, {skipped} skipped, {conflicted} conflicted; {filesApplied} files added.\n");
         text.Append("Nothing was committed. Review with 'git status' and 'git diff'.\n");
         context.Output.Result("apply", new JsonObject
         {
