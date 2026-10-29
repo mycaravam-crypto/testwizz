@@ -29,12 +29,13 @@ After generating and running proposals, use:
 
 ```bash
 testwizz apply . --all --verified-only
+testwizz apply . --all --allow-unverified
 testwizz apply . --all --verified-only --out ../my-proposals --format json
 ```
 
 The command processes proposal bundles in deterministic directory-name order. It applies only proposals with a successful last test run and unchanged generated files. Existing source-staleness checks and destination-file safeguards remain in effect. Invalid, unverified or stale proposals are **skipped**, while destination-path conflicts are reported as **conflicts**. Each proposal has an individual outcome and reason; the summary includes applied, skipped and conflicted counts plus the number of files added. Conflicts cause exit code `1`; skipped proposals alone do not. No Git commits are created. A second invocation will report already-applied files as conflicts (no overwrite).
 
-`--all` requires `--verified-only` and cannot be combined with `--proposal` or `--allow-unverified`. Use `testwizz run . --proposal <id>` to verify proposals before applying them.
+`--all` requires exactly one of `--verified-only` and `--allow-unverified`; neither mode can be combined with `--proposal`. The unverified mode bypasses the successful-run requirement, but retains manifest validity, source freshness, path safety and no-overwrite checks. Use `testwizz run . --proposal <id>` to verify proposals before applying them.
 
 ## Batch performance and debug output
 
