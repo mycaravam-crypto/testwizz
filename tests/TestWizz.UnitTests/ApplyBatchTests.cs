@@ -23,12 +23,26 @@ public sealed class ApplyBatchTests : IDisposable
     [InlineData("--all")]
     [InlineData("--verified-only")]
     [InlineData("--all", "--verified-only", "--allow-unverified")]
+    [InlineData("--all", "--allow-unverified", "--proposal", "abc")]
     [InlineData("--all", "--verified-only", "--proposal", "abc")]
     public void InvalidBatchOptions_AreRejected(params string[] options)
     {
         var (exit, json) = Run(options);
         Assert.Equal(ExitCodes.Error, exit);
         Assert.Equal("usage", (string)json["error"]!["code"]!);
+    }
+
+    [Fact]
+    public void AllowUnverifiedBatch_EmptyDirectory_ReturnsSuccessfulSummary()
+    {
+        Directory.CreateDirectory(Output);
+        File.WriteAllText(Path.Combine(_root, "testwizz.json"), """{"version":1,"output":"proposals"}""");
+
+        var (exit, json) = Run("--all", "--allow-unverified");
+
+        Assert.Equal(ExitCodes.Success, exit);
+        Assert.Equal("testwizz.apply-batch/v1", (string)json["result"]!["schema"]!);
+        Assert.Equal(0, (int)json["result"]!["applied"]!);
     }
 
     [Fact]
