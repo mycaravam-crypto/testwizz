@@ -405,3 +405,23 @@ public sealed class ProposalBundleTests : IAsyncLifetime
         Assert.Single(Directory.GetDirectories(_proposals));
     }
 }
+
+
+public sealed class EscapedModelCodeTests
+{
+    [Fact]
+    public void DecodesEntireDoubleEscapedCSharpFile()
+    {
+        // Encode exactly as an extra JSON string layer, as returned by affected models.
+        var source = "using Xunit;\npublic class A {\n  [Fact]\n  public void Check() { Assert.Equal(\"a\", \"a\"); }\n}";
+        var extraEscaped = System.Text.Json.JsonSerializer.Serialize(source)[1..^1];
+        Assert.Equal(source + "\n", XUnitGenerator.NormalizeModelCode(extraEscaped));
+    }
+
+    [Fact]
+    public void PreservesValidCSharpStringEscapeSequences()
+    {
+        var source = "class A { string Text = \"hello\\\\nworld\"; }";
+        Assert.Equal(source + "\n", XUnitGenerator.NormalizeModelCode(source));
+    }
+}

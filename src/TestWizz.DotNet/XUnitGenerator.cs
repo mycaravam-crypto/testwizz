@@ -148,7 +148,7 @@ public static class XUnitGenerator
     {
         var digest = await client.ModelDigestAsync(cancellationToken).ConfigureAwait(false);
         var response = await client.CompleteJsonAsync(BuildRequest(context, plan, conventions), cancellationToken).ConfigureAwait(false);
-        var code = response.Content["code"]!.GetValue<string>().ReplaceLineEndings("\n").TrimEnd() + "\n";
+        var code = NormalizeModelCode(response.Content["code"]!.GetValue<string>());
         var assumptions = response.Content["assumptions"]!.AsArray()
             .Select(a => a?.GetValue<string>().Trim() ?? "")
             .Where(a => a.Length > 0)
@@ -160,6 +160,35 @@ public static class XUnitGenerator
             digest,
             PromptTemplate,
             PromptSha256));
+    }
+
+    /// <summary>
+    /// Some models return C# with an extra JSON escaping layer inside the already decoded "code" string.
+    /// Only decode when the entire source resembles an escaped document, never individual C# strings.
+    /// </summary>
+    public static string NormalizeModelCode(string raw)
+    {
+        var code = raw.ReplaceLineEndings("\n").Trim();
+        if (!code.Contains('\n') && code.Contains(@"\n", StringComparison.Ordinal))
+        {
+            // A JSON string decoder handles escaped quotes, backslashes and newlines consistently.
+            // Avoid normalization of valid one-line C# source with an intentional \n literal.
+            try
+            {
+                var decoded = System.Text.Json.JsonSerializer.Deserialize<string>("\"" + code + "\"");
+                if (decoded is not null && decoded.Contains('\n') &&
+                    Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(decoded).GetDiagnostics()
+                        .Count(d => d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error) <
+                    Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(code).GetDiagnostics()
+                        .Count(d => d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error))
+                    code = decoded;
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                // Leave malformed data unchanged so normal validation reports the source errors.
+            }
+        }
+        return code.TrimEnd() + "\n";
     }
 
     /// <summary>Validates model output and packages it; separate from the model call so it can be tested directly.</summary>
