@@ -289,7 +289,7 @@ public static class GenerateCommand
         var rows = new JsonArray();
         var markdown = new StringBuilder("# TestWizz changed-code generation\n\n| Target | Status | Proposal |\n|---|---|---|\n");
         var failed = 0;
-        for (var i = 0; i < results.Length; i++)
+        for (var i = 0; i < results.Count; i++)
         {
             var item = results[i];
             if (item.Status != "ok") failed++;
