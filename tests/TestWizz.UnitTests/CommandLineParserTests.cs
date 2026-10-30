@@ -44,6 +44,13 @@ public class CommandLineParserTests
     }
 
     [Fact]
+    public void GenerateBatch_ParsesContinueOnError()
+    {
+        var parsed = Parse("generate", ".", "--since", "main", "--all-changed", "--continue-on-error");
+        Assert.True(parsed.Options.ContainsKey("--continue-on-error"));
+    }
+
+    [Fact]
     public void Bootstrap_ParsesDebug()
     {
         Assert.True(Parse("bootstrap", ".", "--all", "--debug").Options.ContainsKey("--debug"));

@@ -22,6 +22,7 @@ public static class GenerateCommand
     private const string MinRiskOption = "--min-risk";
     private const string DebugOption = "--debug";
     private const string MaxWorkersOption = "--max-workers";
+    private const string ContinueOnErrorOption = "--continue-on-error";
     private const int MaxBatchTargets = 20;
 
     public static CommandDefinition Definition { get; } = new(
@@ -39,6 +40,7 @@ public static class GenerateCommand
             new(MinRiskOption, "Minimum deterministic method-risk score (0-100).", "score"),
             new(DebugOption, "Print each generated test source to stderr (may contain sensitive source code)."),
             new(MaxWorkersOption, "Maximum adaptive LLM workers for --all-changed (1-8; default 4).", "n"),
+            new(ContinueOnErrorOption, "Continue --all-changed after a failed target (default: stop after the first failed wave)."),
         ],
         MaxArguments: 1,
         Handler: Run);
@@ -212,7 +214,9 @@ public static class GenerateCommand
         var config = ConfigCommand.Load(Path.Combine(root, TestWizzConfig.FileName));
         using var model = ModelClient.Create(config.Ai, context.GetEnvironmentVariable);
         var provider = RoslynContextProvider.Load(root);
-        var results = new BatchItem[ranked.Count];
+        var results = new List<BatchItem>();
+        var continueOnError = context.Has(ContinueOnErrorOption);
+        var aborted = false;
         var workers = 1;
         double priorThroughput = 0;
         var position = 0;
@@ -230,7 +234,7 @@ public static class GenerateCommand
                 using var stdout = new StringWriter(CultureInfo.InvariantCulture);
                 using var stderr = new StringWriter(CultureInfo.InvariantCulture);
                 var options = context.Options
-                    .Where(option => option.Key is not (AllChangedOption or SinceOption or MaxWorkersOption))
+                    .Where(option => option.Key is not (AllChangedOption or SinceOption or MaxWorkersOption or ContinueOnErrorOption))
                     .ToDictionary(option => option.Key, option => option.Value, StringComparer.Ordinal);
                 options["--for"] = target;
                 var inner = context with
@@ -258,12 +262,20 @@ public static class GenerateCommand
             for (var i = 0; i < tasks.Length; i++)
             {
                 var item = tasks[i].Result;
-                results[start + i] = item;
+                results.Add(item);
                 if (item.DebugText.Length > 0)
                     context.Output.Stderr.Write(item.DebugText);
                 context.Output.Stderr.WriteLine($"testwizz batch: {start + i + 1}/{ranked.Count} {item.Target}: {item.Status} ({item.Seconds:F1}s)");
             }
             position += count;
+            if (!continueOnError && tasks.Any(task => task.Result.Status != "ok"))
+            {
+                aborted = position < ranked.Count;
+                context.Output.Stderr.WriteLine(
+                    $"testwizz batch: stopped after validation/generation failure; {ranked.Count - position} targets not started. " +
+                    "Use --continue-on-error to process all targets.");
+                break;
+            }
             var throughput = count / Math.Max(0.001, stopwatch.Elapsed.TotalSeconds);
             context.Output.Stderr.WriteLine($"testwizz batch: workers={workers}, throughput={throughput:F3} targets/s");
             // Additive ramp-up with regression backoff: do not increase concurrency when
@@ -277,7 +289,7 @@ public static class GenerateCommand
         var rows = new JsonArray();
         var markdown = new StringBuilder("# TestWizz changed-code generation\n\n| Target | Status | Proposal |\n|---|---|---|\n");
         var failed = 0;
-        for (var i = 0; i < results.Length; i++)
+        for (var i = 0; i < results.Count; i++)
         {
             var item = results[i];
             if (item.Status != "ok") failed++;
@@ -295,12 +307,15 @@ public static class GenerateCommand
                 .Append(item.Proposal is null ? "—" : "`" + item.Proposal.Replace("|", "\\|", StringComparison.Ordinal) + "`")
                 .Append(" |\n");
         }
-        markdown.Append(CultureInfo.InvariantCulture, $"\n{results.Length} target(s), {failed} failed. No repository files were modified.\n");
+        markdown.Append(CultureInfo.InvariantCulture, $"\n{results.Count} of {ranked.Count} target(s) processed, {failed} failed; {ranked.Count - results.Count} not started. No repository files were modified.\n");
         context.Output.Result("generate", new JsonObject
         {
             ["schema"] = "testwizz.generate-batch/v1",
             ["base"] = since,
-            ["total"] = results.Length,
+            ["total"] = ranked.Count,
+            ["processed"] = results.Count,
+            ["notStarted"] = ranked.Count - results.Count,
+            ["aborted"] = aborted,
             ["failed"] = failed,
             ["minRisk"] = minRisk,
             ["maxWorkers"] = limit,
