@@ -33,6 +33,10 @@ jobs:
           TESTWIZZ_DOCKER_TESTS: 1
       - run: bash .github/scripts/semver-next.test.sh
       - run: dotnet pack src/TestWizz.Cli --no-build -c Release -o artifacts
+      - name: Verify explicit release package version
+        run: |
+          dotnet pack src/TestWizz.Cli --no-build -c Release -p:Version=0.1.0 -o artifacts/pinned-release
+          test -f artifacts/pinned-release/TestWizz.0.1.0.nupkg
       - name: Verify Git-derived package version
         run: |
           ls -la artifacts/*.nupkg
