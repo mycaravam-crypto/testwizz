@@ -41,6 +41,7 @@
     <InternalsVisibleTo Include="TestWizz.UnitTests" />
     <EmbeddedResource Include="../../scripts/vue-context.mjs" LogicalName="vue-context.mjs" />
     <EmbeddedResource Include="../../scripts/vue-ts-context.mjs" LogicalName="vue-ts-context.mjs" />
+    <EmbeddedResource Include="../../scripts/ui-snapshot.mjs" LogicalName="ui-snapshot.mjs" />
   </ItemGroup>
 
 </Project>
