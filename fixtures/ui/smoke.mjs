@@ -18,6 +18,7 @@ const proposals = join(temporary, 'proposals');
 let broken = false;
 let requested = 0;
 let websocketConnections = 0;
+let writeRequests = 0;
 let app;
 let model;
 let socketServer;
@@ -62,6 +63,7 @@ function html(wsPort) {
 <script>
   // This attempt must be blocked by the non-interactive snapshot's WebSocket policy.
   try { new WebSocket('ws://127.0.0.1:${wsPort}/'); } catch {}
+  fetch('/unsafe', { method: 'POST', body: 'mutation' }).catch(() => {});
   document.querySelector('form').addEventListener('submit', event => {
     event.preventDefault();
     const address = document.getElementById('address').value.trim();
@@ -90,6 +92,7 @@ try {
   const wsPort = await listen(socketServer);
 
   app = createServer((request, response) => {
+    if (request.method === 'POST') writeRequests++;
     response.setHeader('Content-Type', 'text/html; charset=utf-8');
     if (request.url !== '/orders/new') {
       response.writeHead(404).end('Not found');
@@ -144,6 +147,7 @@ try {
   assert.equal(command.result.tests, 2);
   assert.equal(requested, 1);
   assert.equal(websocketConnections, 0, 'Snapshot must not open WebSocket connections');
+  assert.equal(writeRequests, 0, 'Snapshot must not send state-changing HTTP requests');
 
   const bundle = command.result.path;
   const manifest = JSON.parse(await readFile(join(bundle, 'manifest.json'), 'utf8'));
