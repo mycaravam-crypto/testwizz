@@ -48,7 +48,7 @@ const modelAnswer = {
 };
 
 function html(wsPort) {
-  return \`<!doctype html>
+  return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Order test page</title></head>
 <body>
 <main><h1>Create order</h1>
@@ -61,18 +61,18 @@ function html(wsPort) {
 </main>
 <script>
   // This attempt must be blocked by the non-interactive snapshot's WebSocket policy.
-  try { new WebSocket('ws://127.0.0.1:\${wsPort}/'); } catch {}
+  try { new WebSocket('ws://127.0.0.1:${wsPort}/'); } catch {}
   document.querySelector('form').addEventListener('submit', event => {
     event.preventDefault();
     const address = document.getElementById('address').value.trim();
     document.getElementById('error').hidden = true;
     document.getElementById('success').hidden = true;
     if (!address) {
-      if (!\${broken}) document.getElementById('error').hidden = false;
+      if (!${broken}) document.getElementById('error').hidden = false;
     } else document.getElementById('success').hidden = false;
   });
 </script>
-</body></html>\`;
+</body></html>`;
 }
 
 try {
@@ -128,10 +128,10 @@ try {
 
   await writeFile(join(project, 'testwizz.json'), JSON.stringify({
     version: 1,
-    ai: { provider: 'ollama', endpoint: \`http://127.0.0.1:\${modelPort}\`, model: 'fixture-model', timeoutSeconds: 15 }
+    ai: { provider: 'ollama', endpoint: `http://127.0.0.1:${modelPort}`, model: 'fixture-model', timeoutSeconds: 15 }
   }));
 
-  const appUrl = \`http://127.0.0.1:\${appPort}/orders/new\`;
+  const appUrl = `http://127.0.0.1:${appPort}/orders/new`;
   const dll = join(repository, 'src/TestWizz.Cli/bin/Release/net10.0/TestWizz.Cli.dll');
   const { stdout } = await execute('dotnet', [
     dll, 'ui', project, '--url', appUrl, '--criteria', 'criteria.md',
