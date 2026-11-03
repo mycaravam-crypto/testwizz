@@ -15,6 +15,7 @@ Status: early development. See [PLAN.md](PLAN.md) for the design and milestones.
 | `testwizz context [path] --for <target>` | Show the `testwizz.context/v1` context for a C# type or method (signature, source excerpt, injected dependencies, thrown exceptions, related tests). |
 | `testwizz plan [path] --for <method> [--ai]` | Plan evidence-linked test scenarios (`testwizz.plan/v1`); `--ai` lets the local model propose more. |
 | `testwizz generate [path] --for <method> [--out <dir>] [--ai-plan]` or `testwizz generate [path] --since <ref> [--list-changed] [--for <method>]` | Plan, let the local model write xUnit tests, validate them and save a proposal bundle outside the repository. The repository is not changed. |
+| `testwizz ui [path] --url <loopback-url> --criteria <file.md>` | Generate review-first Playwright UI proposals from a running local route and explicit acceptance criteria; does not execute tests. |
 | `testwizz run [path] --proposal <id> [--no-repair] [--image <image>] [--timeout <s>]` | Build and run a proposal's tests in a Docker/Podman container with the network off, and let the model repair failing tests (bounded). Results go into the bundle. Never runs on the host. |
 | `testwizz apply [path] --proposal <id> [--allow-unverified]` | Copy a proposal's new test files into the repository after stale and overwrite checks. Nothing is committed. |
 
@@ -85,7 +86,7 @@ Criteria are Markdown bullets (maximum 5 per invocation), for example:
 ```
 
 TestWizz captures one bounded accessibility snapshot of the local route with Playwright.
-Requests from that browser are restricted to the route's origin; service workers are blocked.
+Ordinary browser requests are restricted to the route's origin; service workers and WebSocket connections are blocked during inspection.
 The configured local model receives the criterion statements plus the *observed* UI snapshot,
 and writes one Playwright test per criterion. Each test retains its requirement evidence.
 The generator checks structure, prohibited operations and JavaScript syntax without running
@@ -106,6 +107,23 @@ does not yet support UI proposals: it deliberately fails for unsupported stacks.
 `testwizz apply --proposal <id> --allow-unverified` can copy an unexecuted UI proposal into
 the repository, subject to the normal no-overwrite and staleness guards. Use the target
 project's own Playwright runner after review; never point it at production.
+
+Reproducible example (CI uses a deterministic **fake model**, not an AI quality benchmark):
+
+```bash
+dotnet build -c Release
+npm install --prefix fixtures/ui --ignore-scripts --no-audit --no-fund
+./fixtures/ui/node_modules/.bin/playwright install --with-deps chromium
+node fixtures/ui/smoke.mjs
+```
+
+The test uses one local order form and two acceptance criteria. It verifies scenario/evidence
+links, runs both generated Playwright tests against the correct app, and confirms that
+deliberately breaking address validation fails exactly the corresponding test. It also checks
+that malicious UI text cannot close the untrusted-data prompt block and that snapshot
+inspection blocks WebSockets. The model response is fixed: this proves the **technical test
+pipeline**, not a real model's selector accuracy or expected-result quality. Assess those
+separately with the configured local model before trusting generated tests.
 
 Limitations: only loopback HTTP URLs, one initial-page snapshot (no autonomous exploration,
 authentication or multi-page traversal), up to five top-level Markdown bullets, no assertion
