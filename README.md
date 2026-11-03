@@ -86,7 +86,7 @@ Criteria are Markdown bullets (maximum 5 per invocation), for example:
 ```
 
 TestWizz captures one bounded accessibility snapshot of the local route with Playwright.
-Ordinary browser requests are restricted to the route's origin; service workers and WebSocket connections are blocked during inspection.
+During inspection, only same-origin GET/HEAD browser requests are allowed; service workers, WebSockets and state-changing HTTP methods are blocked.
 The configured local model receives the criterion statements plus the *observed* UI snapshot,
 and writes one Playwright test per criterion. Each test retains its requirement evidence.
 The generator checks structure, prohibited operations and JavaScript syntax without running
