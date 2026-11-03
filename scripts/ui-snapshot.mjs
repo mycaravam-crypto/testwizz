@@ -10,6 +10,8 @@ const { chromium } = require('@playwright/test');
 const browser = await chromium.launch({ headless: true });
 try {
   const context = await browser.newContext({ serviceWorkers: 'block' });
+  // Browser observation is non-interactive: do not allow background WebSocket traffic.
+  await context.routeWebSocket('**/*', socket => socket.close());
   await context.route('**/*', route => {
     const request = new URL(route.request().url());
     return request.origin === target.origin ? route.continue() : route.abort();
