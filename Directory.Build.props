@@ -7,7 +7,9 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AnalysisLevel>latest-recommended</AnalysisLevel>
     <Deterministic>true</Deterministic>
-    <Version>0.1.0</Version>
+    <!-- Only an implicit version should use Git-derived development versions. -->
+    <_TwUseGitVersion Condition="'$(Version)' == ''">true</_TwUseGitVersion>
+    <Version Condition="'$(Version)' == ''">0.1.0</Version>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
