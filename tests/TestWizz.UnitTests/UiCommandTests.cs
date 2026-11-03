@@ -50,7 +50,7 @@ public class UiCommandTests
         using var stdout = new StringWriter();
         using var stderr = new StringWriter();
         var exit = new TestWizz.Cli.CliApp(stdout, stderr, Path.GetTempPath()).Run(
-            ["ui", "--url", url, "--criteria", "example.md", "--format", "json"]);
+            ["ui", "--url", url, "--criteria", "example.md", "--format", "json"], TestContext.Current.CancellationToken);
         Assert.Equal(2, exit);
         Assert.Contains("ui.invalid_url", stdout.ToString(), StringComparison.Ordinal);
     }
