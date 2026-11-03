@@ -14,7 +14,8 @@ try {
   await context.routeWebSocket('**/*', socket => socket.close());
   await context.route('**/*', route => {
     const request = new URL(route.request().url());
-    return request.origin === target.origin ? route.continue() : route.abort();
+    const readOnly = ['GET', 'HEAD'].includes(route.request().method());
+    return request.origin === target.origin && readOnly ? route.continue() : route.abort();
   });
 
   const page = await context.newPage();
