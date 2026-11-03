@@ -31,6 +31,12 @@ jobs:
         env:
           # The hosted runner has Docker; this enables the real-container tests for `testwizz run`.
           TESTWIZZ_DOCKER_TESTS: 1
+      - name: Validate UI acceptance against a real local browser
+        run: |
+          npm install --prefix fixtures/ui --ignore-scripts --no-audit --no-fund
+          ./fixtures/ui/node_modules/.bin/playwright install --with-deps chromium
+          node --check fixtures/ui/smoke.mjs
+          node fixtures/ui/smoke.mjs
       - run: bash .github/scripts/semver-next.test.sh
       - run: dotnet pack src/TestWizz.Cli --no-build -c Release -o artifacts
       - name: Verify explicit release package version
