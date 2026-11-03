@@ -257,7 +257,9 @@ public static class UiCommand
                 findings.Add(GenerationFinding.Error("ui.invalid_test", "Unknown, duplicate or oversized test/criterion."));
                 continue;
             }
-            if (!Regex.IsMatch(body, @"\bexpect\s*\(") || Regex.IsMatch(body,
+            if (!Regex.IsMatch(body, @"\bexpect\s*\(")
+                || Regex.IsMatch(body, @"expect\s*\(\s*(?:true|false|null|undefined|\d+)\s*\)")
+                || Regex.IsMatch(body,
                     @"\b(?:import|require|process|eval|Function|fetch|test\.skip|test\.only|page\.request|page\.route|page\.goto|page\.evaluate)\b"))
                 findings.Add(GenerationFinding.Error("ui.unsafe_or_weak", $"Test {id} has no assertion or uses unsupported APIs."));
             tests.Add((id, title, body));
