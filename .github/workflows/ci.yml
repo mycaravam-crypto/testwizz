@@ -10,7 +10,8 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Playwright 1.57 Chromium binaries support Ubuntu 24.04, not Ubuntu 26.04.
+    runs-on: ubuntu-24.04
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: 1
       DOTNET_NOLOGO: 1
