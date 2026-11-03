@@ -9,7 +9,7 @@
   </PropertyGroup>
 
   <Target Name="TestWizzGitVersion" BeforeTargets="GenerateAssemblyInfo;GenerateNuspec;GetPackageContents;_GetPackageFiles;GetAssemblyVersion"
-          Condition="'$(Version)' == '0.1.0' and '$(TestWizzDisableGitVersion)' != 'true'">
+          Condition="'$(_TwUseGitVersion)' == 'true' and '$(TestWizzDisableGitVersion)' != 'true'">
     <Exec Command="git describe --tags --long --match &quot;v[0-9]*.[0-9]*.[0-9]*&quot;" WorkingDirectory="$(MSBuildProjectDirectory)"
           ConsoleToMSBuild="true" IgnoreExitCode="true" EchoOff="true" StandardOutputImportance="low">
       <Output TaskParameter="ConsoleOutput" PropertyName="_TwDescribe" />
