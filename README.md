@@ -69,20 +69,20 @@ The initial implementation discovers public/internal/protected-internal C# metho
 ## Minimal UI test proposals (experimental)
 
 A running **local** HTTP application, a Markdown file of acceptance criteria and an existing
-project-local \`@playwright/test\` installation are required. No Git history, issue tracker,
+project-local `@playwright/test` installation are required. No Git history, issue tracker,
 external AI service or long-running autonomous agent is needed.
 
-\`\`\`bash
+```bash
 # In the target application's repository:
 testwizz ui . --url http://localhost:5173/orders/new --criteria requirements/ORDER-42.md
-\`\`\`
+```
 
 Criteria are Markdown bullets (maximum 5 per invocation), for example:
 
-\`\`\`markdown
+```markdown
 - Submitting without a delivery address shows a validation error.
 - A valid delivery address allows submitting the order.
-\`\`\`
+```
 
 TestWizz captures one bounded accessibility snapshot of the local route with Playwright.
 Requests from that browser are restricted to the route's origin; service workers are blocked.
@@ -93,17 +93,17 @@ generated tests. It saves the familiar proposal bundle outside the working tree.
 
 A snapshot recorded in advance can replace live browser inspection:
 
-\`\`\`bash
+```bash
 testwizz ui . --url http://localhost:5173/orders/new \
   --criteria requirements/ORDER-42.md --snapshot fixtures/checkout-snapshot.json
-\`\`\`
+```
 
-Snapshot JSON must contain a \`snapshot\` string. This path is useful for offline fixture tests.
+Snapshot JSON must contain a `snapshot` string. This path is useful for offline fixture tests.
 Source criteria files are SHA-256 tracked; stale proposals cannot be applied. Generated files are
-placed under \`tests/e2e/\`. **Review \`plan.md\`, \`findings.md\` and \`changes.patch\`.**
-This command never executes generated browser tests. The existing \`testwizz run\` command
+placed under `tests/e2e/`. **Review `plan.md`, `findings.md` and `changes.patch`.**
+This command never executes generated browser tests. The existing `testwizz run` command
 does not yet support UI proposals: it deliberately fails for unsupported stacks. Only an explicit
-\`testwizz apply --proposal <id> --allow-unverified\` can copy an unexecuted UI proposal into
+`testwizz apply --proposal <id> --allow-unverified` can copy an unexecuted UI proposal into
 the repository, subject to the normal no-overwrite and staleness guards. Use the target
 project's own Playwright runner after review; never point it at production.
 
