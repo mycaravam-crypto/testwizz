@@ -160,7 +160,7 @@ public static class UiCommand
             ["path"] = proposal.Directory,
             ["valid"] = generation.IsValid,
             ["tests"] = tests.Length,
-            ["findings"] = findings.Length,
+            ["findings"] = findings.Count,
             ["executed"] = false,
         }, $"UI proposal: {proposal.Directory}\nTests: {tests.Length}; valid: {generation.IsValid}; executed: no.\nReview plan.md and changes.patch before applying.\n",
         generation.IsValid ? "ok" : "failed");
