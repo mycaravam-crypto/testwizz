@@ -136,14 +136,16 @@ public static class UiCommand
             c.Text, [c.Id], "deterministic", false, null, [])).ToArray();
         var plan = ScenarioPlanner.Create(document, "ui-criteria/v1", new ExtractionResult(evidences, scenarios, []));
         // ScenarioPlanner assigns S1..Sn. Keep AC ids as evidence and map by order.
-        var parsed = Validate(answer.Content, criteria, url, root);
+        var parsed = Validate(answer.Content, criteria);
         var generatedPath = "tests/e2e/generated-" + Hash(Encoding.UTF8.GetBytes(url.PathAndQuery + "\n" + sourceHash))[..12] + ".spec.mjs";
         var tests = parsed.Tests.Select((test, i) => new GeneratedTest(
             test.Title, i + 1, ["S" + (i + 1)], false,
             new AssertionSummary(1, 0, []))).ToArray();
         var code = Render(url, parsed.Tests);
         var files = new[] { new GeneratedFile(generatedPath, code) };
-        var findings = parsed.Findings.Concat(ProposalChecks.Paths(root, files)).ToArray();
+        var findings = parsed.Findings.Concat(ProposalChecks.Paths(root, files)).ToList();
+        if (!SyntaxValid(code))
+            findings.Add(GenerationFinding.Error("ui.syntax", "Generated JavaScript does not parse as an ES module."));
         var generation = new GenerationResult("ui", target, url.PathAndQuery,
             PlanJson.ContextHash(document),
             new GenerationProvenance("local", config.Ai.Model, null, PromptVersion,
@@ -239,7 +241,7 @@ public static class UiCommand
 
     public static (IReadOnlyList<(string Id, string Title, string Body)> Tests, IReadOnlyList<string> Assumptions,
         IReadOnlyList<GenerationFinding> Findings) Validate(
-        JsonObject json, IReadOnlyList<(string Id, string Text)> criteria, Uri url, string root)
+        JsonObject json, IReadOnlyList<(string Id, string Text)> criteria)
     {
         var findings = new List<GenerationFinding>();
         var tests = new List<(string Id, string Title, string Body)>();
@@ -256,7 +258,7 @@ public static class UiCommand
                 continue;
             }
             if (!Regex.IsMatch(body, @"\bexpect\s*\(") || Regex.IsMatch(body,
-                    @"\b(?:import|require|process|eval|Function|fetch|test\.skip|test\.only|page\.request|page\.route)\b"))
+                    @"\b(?:import|require|process|eval|Function|fetch|test\.skip|test\.only|page\.request|page\.route|page\.goto|page\.evaluate)\b"))
                 findings.Add(GenerationFinding.Error("ui.unsafe_or_weak", $"Test {id} has no assertion or uses unsupported APIs."));
             tests.Add((id, title, body));
         }
@@ -265,6 +267,38 @@ public static class UiCommand
         var assumptions = json["assumptions"]?.AsArray()
             .Select(x => x?.GetValue<string>() ?? "").Where(x => x.Length is > 0 and <= 300).Take(10).ToArray() ?? [];
         return (tests.OrderBy(t => t.Id, StringComparer.Ordinal).ToArray(), assumptions, findings);
+    }
+
+    // Parse only: node --check never evaluates generated test code.
+    private static bool SyntaxValid(string source)
+    {
+        try
+        {
+            using var process = new Process
+            {
+                StartInfo = new ProcessStartInfo("node")
+                {
+                    RedirectStandardInput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                },
+            };
+            process.StartInfo.ArgumentList.Add("--check");
+            process.StartInfo.ArgumentList.Add("--input-type=module");
+            process.Start();
+            process.StandardInput.Write(source);
+            process.StandardInput.Close();
+            if (!process.WaitForExit(5000))
+            {
+                process.Kill(entireProcessTree: true);
+                return false;
+            }
+            return process.ExitCode == 0;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
     }
 
     private static string Render(Uri url, IReadOnlyList<(string Id, string Title, string Body)> tests)
