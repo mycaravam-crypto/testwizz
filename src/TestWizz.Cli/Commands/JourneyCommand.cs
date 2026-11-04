@@ -176,9 +176,11 @@ public static class JourneyCommand
             using (var resource = typeof(JourneyCommand).Assembly.GetManifestResourceStream("ui-journey.mjs")
                 ?? throw new CliException("journey.helper_missing", "Embedded Playwright helper missing."))
             using (var file = File.Create(helper)) resource.CopyTo(file);
-            var browser = Capture(root, url.ToString(), stepsFull, staging, helper, context.CancellationToken);
-            if (browser.Length != spec.Steps.Count)
-                throw new CliException("journey.capture_invalid", "Playwright returned a different number of screenshots.");
+            var captured = Capture(root, url.ToString(), stepsFull, staging, helper, context.CancellationToken);
+            var browser = captured.GetProperty("stepIds").EnumerateArray().Select(x => x.GetInt32()).ToArray();
+            var guideRecords = captured.GetProperty("guides").EnumerateArray().ToArray();
+            if (browser.Length != spec.Steps.Count || guideRecords.Length != spec.Steps.Count)
+                throw new CliException("journey.capture_invalid", "Playwright returned incomplete screenshot metadata.");
             var evidence = new JsonArray();
             for (var i = 0; i < spec.Steps.Count; i++)
             {
@@ -188,10 +190,45 @@ public static class JourneyCommand
                 var image = File.ReadAllBytes(Path.Combine(staging, rel));
                 if (image.Length is < 32 or > 10485760)
                     throw new CliException("journey.capture_invalid", "Screenshot has an invalid size.");
+                var guide = guideRecords[i];
+                if (guide.GetProperty("stepId").GetInt32() != spec.Steps[i].StepId)
+                    throw new CliException("journey.capture_invalid", "Guide screenshot step order differs from test evidence.");
+                var guideRel = $"screenshots/step-{spec.Steps[i].StepId:D4}-guide.png";
+                var guideFull = Path.Combine(staging, guideRel);
+                if (!File.Exists(guideFull))
+                    throw new CliException("journey.capture_invalid", "The annotated before-action screenshot is missing.");
+                var guideImage = File.ReadAllBytes(guideFull);
+                if (guideImage.Length is < 32 or > 10485760)
+                    throw new CliException("journey.capture_invalid", "Annotated screenshot has an invalid size.");
+                var callouts = new JsonArray();
+                var usedNumbers = new HashSet<int>();
+                foreach (var marker in guide.GetProperty("callouts").EnumerateArray())
+                {
+                    var number = marker.GetProperty("number").GetInt32();
+                    var markedStepId = marker.GetProperty("stepId").GetInt32();
+                    var target = marker.GetProperty("target").GetString();
+                    var x = marker.GetProperty("x").GetInt32();
+                    var y = marker.GetProperty("y").GetInt32();
+                    if (number < 1 || number > spec.Steps.Count || !usedNumbers.Add(number) ||
+                        markedStepId != spec.Steps[number - 1].StepId ||
+                        target != (spec.Steps[number - 1].Label ??
+                            spec.Steps[number - 1].Name ?? spec.Steps[number - 1].TestId) ||
+                        x is < 0 or >= 1440 || y is < 0 or >= 900)
+                        throw new CliException("journey.capture_invalid", "Browser returned invalid or unreviewed callout metadata.");
+                    callouts.Add(new JsonObject {
+                        ["number"] = number, ["stepId"] = markedStepId,
+                        ["target"] = target, ["x"] = x, ["y"] = y,
+                    });
+                }
+                if (!usedNumbers.Contains(i + 1))
+                    throw new CliException("journey.capture_invalid", "Current action needs a visible numbered callout.");
                 evidence.Add(new JsonObject {
                     ["stepId"] = spec.Steps[i].StepId, ["action"] = testCase.Steps[i].Action,
                     ["expected"] = testCase.Steps[i].Expected, ["result"] = "passed",
                     ["screenshot"] = rel, ["sha256"] = Convert.ToHexStringLower(SHA256.HashData(image)),
+                    ["guideScreenshot"] = guideRel,
+                    ["guideSha256"] = Convert.ToHexStringLower(SHA256.HashData(guideImage)),
+                    ["callouts"] = callouts,
                 });
             }
             var manifest = new JsonObject {
@@ -227,7 +264,7 @@ public static class JourneyCommand
         }
     }
 
-    private static int[] Capture(string root, string url, string spec, string output, string helper, CancellationToken token)
+    private static JsonElement Capture(string root, string url, string spec, string output, string helper, CancellationToken token)
     {
         if (!File.Exists(Path.Combine(root, "package.json")))
             throw new CliException("journey.playwright_missing", "Target repository needs package.json and @playwright/test.");
@@ -256,7 +293,7 @@ public static class JourneyCommand
                 if (response.Length > 8192)
                     throw new CliException("journey.capture_invalid", "Unexpectedly large browser response.");
                 using var json = JsonDocument.Parse(response);
-                return json.RootElement.GetProperty("stepIds").EnumerateArray().Select(x => x.GetInt32()).ToArray();
+                return json.RootElement.Clone();
             }
             catch (OperationCanceledException) when (!token.IsCancellationRequested)
             {
