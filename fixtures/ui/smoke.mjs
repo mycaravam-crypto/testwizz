@@ -171,6 +171,61 @@ try {
   const passing = await run();
   assert.match(passing.stdout + passing.stderr, /2 passed/);
 
+  // Exercise the reviewed journey capture against this real local browser and fake read-only ADO CLI.
+  const fakeBin = join(temporary, 'bin');
+  await mkdir(fakeBin);
+  const adoContext = {
+    schema: 'ado.requirement-context/v1',
+    id: 4711, revision: 5, currentRevision: 5, isCurrent: true,
+    server: 'https://tfs.example.test/tfs/DefaultCollection', project: 'Shop',
+    webUrl: 'https://tfs.example.test/Shop/_workitems/edit/4711',
+    acceptanceCriteria: {
+      sourceField: 'Microsoft.VSTS.Common.AcceptanceCriteria',
+      items: [{ index: 1, text: 'Valid order shows confirmation' }]
+    }
+  };
+  await writeFile(join(fakeBin, 'ado'),
+    '#!/usr/bin/env node\nconsole.log(JSON.stringify(' + JSON.stringify(adoContext) + '));\n',
+    { mode: 0o755 });
+  const adoPlan = join(temporary, 'ado-plan.json');
+  await writeFile(adoPlan, JSON.stringify({
+    format: 'ado-testplan/1', project: 'Shop', plan: { id: 12 },
+    suites: [{ testCaseIds: [512] }],
+    testCases: [{
+      id: 512, rev: 3, title: 'Create order',
+      steps: [
+        { id: 2, action: 'Enter delivery address', expectedResult: 'Address entered' },
+        { id: 3, action: 'Place order', expectedResult: 'Order created' }
+      ]
+    }]
+  }));
+  await writeFile(join(project, 'journey.json'), JSON.stringify({
+    schema: 'testwizz.journey/v1',
+    steps: [
+      { stepId: 2, action: 'fill', label: 'Delivery address', value: 'Dock 3',
+        expectRole: 'heading', expectName: 'Create order' },
+      { stepId: 3, action: 'click', role: 'button', name: 'Place order',
+        expectText: 'Order created' }
+    ]
+  }));
+  const journeyOut = join(temporary, 'journey-evidence');
+  const captured = await execute('dotnet', [
+    dll, 'journey', project, '--url', appUrl,
+    '--workitem', '4711', '--plan', adoPlan, '--case', '512',
+    '--steps', 'journey.json', '--out', journeyOut, '--format', 'json'
+  ], { timeout: 90000, env: { ...process.env, PATH: fakeBin + ':' + process.env.PATH } });
+  const journeyResult = JSON.parse(captured.stdout);
+  assert.equal(journeyResult.status, 'ok');
+  assert.equal(journeyResult.result.steps, 2);
+  const journeyManifest = JSON.parse(await readFile(join(journeyResult.result.path, 'manifest.json'), 'utf8'));
+  assert.equal(journeyManifest.schema, 'testwizz.ui-evidence/v1');
+  assert.equal(journeyManifest.source.relation, 'selected-not-verified');
+  for (const step of journeyManifest.steps) {
+    const screenshot = await readFile(join(journeyResult.result.path, step.screenshot));
+    assert.deepEqual([...screenshot.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+    assert.equal(step.result, 'passed');
+  }
+
   broken = true;
   let failure;
   try { await run(); }

@@ -16,6 +16,7 @@ Status: early development. See [PLAN.md](PLAN.md) for the design and milestones.
 | `testwizz plan [path] --for <method> [--ai]` | Plan evidence-linked test scenarios (`testwizz.plan/v1`); `--ai` lets the local model propose more. |
 | `testwizz generate [path] --for <method> [--out <dir>] [--ai-plan]` or `testwizz generate [path] --since <ref> [--list-changed] [--for <method>]` | Plan, let the local model write xUnit tests, validate them and save a proposal bundle outside the repository. The repository is not changed. |
 | `testwizz ui [path] --url <loopback-url> (--criteria <file.md> \| --ado-workitem <id>)` | Generate review-first Playwright UI proposals from a local route and explicit Markdown or Azure DevOps work-item acceptance criteria; does not execute tests. |
+| `testwizz journey [path] --url <loopback-url> --workitem <id> --plan <ado-plan.json> --case <id> --steps <reviewed.json>` | Capture step screenshots and assertion evidence from a reviewed ADO test case; does not execute AI-generated code. |
 | `testwizz run [path] --proposal <id> [--no-repair] [--image <image>] [--timeout <s>]` | Build and run a proposal's tests in a Docker/Podman container with the network off, and let the model repair failing tests (bounded). Results go into the bundle. Never runs on the host. |
 | `testwizz apply [path] --proposal <id> [--allow-unverified]` | Copy a proposal's new test files into the repository after stale and overwrite checks. Nothing is committed. |
 
@@ -35,6 +36,37 @@ Each proposal records the ADO work-item ID, server, project, field, current revi
 
 `testwizz ui` only generates review-first Playwright proposals. The current `testwizz run` command does **not** run UI proposals; it currently supports .NET proposals only.
 
+
+### Screenshot evidence from reviewed ADO test-case steps
+
+First use `testwizz ui --ado-workitem <id>` to propose Playwright tests with the configured local AI. Review the intended interactions. Then export the linked ADO test plan and record the reviewed interactions in a small declarative `journey.json` (not generated JavaScript).
+
+```bash
+ado testplan export 12 --output ../ado-plan.json
+testwizz journey . --url http://127.0.0.1:5173/orders \
+  --workitem 4711 --plan ../ado-plan.json --case 512 \
+  --steps journey.json --out ../journey-evidence
+```
+
+Example `journey.json`, with ADO test-step IDs and fixture data:
+
+```json
+{
+  "schema": "testwizz.journey/v1",
+  "steps": [
+    { "stepId": 2, "action": "click", "role": "button", "name": "New",
+      "expectRole": "heading", "expectName": "Create order" },
+    { "stepId": 3, "action": "fill", "label": "Customer", "value": "Fixture Customer",
+      "expectText": "Fixture Customer" }
+  ]
+}
+```
+
+The command reads current acceptance criteria through `ado workitem context`, matches *every* reviewed step ID and order against the exported `ado-testplan/1` test case, and captures a screenshot after each Playwright visibility assertion. It runs a fixed, bounded Playwright interpreter: **no AI-generated JavaScript is executed**. Output is an external `testwizz.ui-evidence/v1` manifest and PNG images. The chosen work-item/test-case pair is deliberately marked `selected-not-verified`: selecting them together does not prove an explicit ADO `Tested By` relationship or acceptance fulfillment.
+
+This first increment supports click/fill, simple visible assertions, a running HTTP loopback application, 1–6 test steps, and synthetic data. It does not automate login, execute full AI-generated Playwright specs, or verify ADO requirement-to-test-case links. Actions can mutate local application data; **use a disposable test environment**. No cross-origin browser requests are allowed. Keep plan exports, browser output and credentials outside public repositories; review screenshots for personal data before sharing.
+
+Use `docwizz generate . --html --journeys ../journey-evidence` to publish a **review-first** step-by-step user-guide draft from the validated evidence.
 Global options: `--format text|json`, `--help`, `--version`.
 
 With `--format json`, stdout contains exactly one JSON object (`"schema": "testwizz.output/v1"`); human-readable diagnostics go to stderr.
