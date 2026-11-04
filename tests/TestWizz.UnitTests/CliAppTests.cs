@@ -137,7 +137,7 @@ public sealed class CliAppTests : IDisposable
 
         Assert.Equal(ExitCodes.Success, exit);
         var names = ParseJson(stdout)["result"]!["commands"]!.AsArray().Select(c => (string)c!["name"]!);
-        Assert.Equal(["help", "init", "config", "ai", "context", "plan", "generate", "ui", "bootstrap", "run", "apply"], names);
+        Assert.Equal(["help", "init", "config", "ai", "context", "plan", "generate", "ui", "journey", "bootstrap", "run", "apply"], names);
     }
 
     [Theory]
