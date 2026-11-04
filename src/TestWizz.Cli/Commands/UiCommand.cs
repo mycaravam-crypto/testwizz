@@ -58,11 +58,12 @@ public static class UiCommand
     public static CommandDefinition Definition { get; } = new(
         "ui",
         "Generate reviewable Playwright UI tests from a local route and Markdown acceptance criteria. Never executes generated tests.",
-        "testwizz ui [path] --url <local-url> --criteria <markdown> [--snapshot <json>] [--out <dir>]",
+        "testwizz ui [path] --url <local-url> (--criteria <markdown> | --ado-workitem <id>) [--snapshot <json>] [--out <dir>]",
         Options:
         [
             new("--url", "Running local application URL (loopback HTTP only).", "url"),
             new("--criteria", "Repository-relative Markdown with acceptance criteria.", "file"),
+            new("--ado-workitem", "Read explicit acceptance criteria via ado workitem context <id>.", "id"),
             new("--snapshot", "Optional recorded Playwright snapshot JSON, for offline/repeatable generation.", "json"),
             new("--out", "Proposal directory outside the repository.", "dir"),
         ],
@@ -74,28 +75,51 @@ public static class UiCommand
         var root = context.PathArgument();
         var address = context.Options.GetValueOrDefault("--url");
         var criteriaPath = context.Options.GetValueOrDefault("--criteria");
-        if (string.IsNullOrWhiteSpace(address) || string.IsNullOrWhiteSpace(criteriaPath))
-            throw new CliException("usage", Definition.Usage);
+        var adoIdText = context.Options.GetValueOrDefault("--ado-workitem");
+        if (string.IsNullOrWhiteSpace(address) ||
+            (string.IsNullOrWhiteSpace(criteriaPath) == string.IsNullOrWhiteSpace(adoIdText)))
+            throw new CliException("usage", "Supply exactly one of --criteria <markdown> and --ado-workitem <id>. " + Definition.Usage);
 
         if (!Uri.TryCreate(address, UriKind.Absolute, out var url) || url.Scheme != "http"
             || !url.IsLoopback || !string.IsNullOrEmpty(url.UserInfo) || url.Port <= 0
             || url.AbsolutePath.StartsWith("//", StringComparison.Ordinal))
             throw new CliException("ui.invalid_url", "Only explicit HTTP loopback URLs (localhost, 127.0.0.1, [::1]) are supported.");
 
-        // The input must be tracked with the proposal; no paths or symlinks outside the repository.
-        criteriaPath = criteriaPath.Replace('\\', '/');
-        if (!PathGuard.IsSafeRelative(criteriaPath))
-            throw new CliException("ui.criteria_path", "Criteria must be a repository-relative Markdown path.");
-        var criteriaFull = Path.Combine(root, criteriaPath);
-        if (!PathGuard.IsWithin(root, criteriaFull) || !File.Exists(criteriaFull) || !criteriaPath.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
-            throw new CliException("ui.criteria_path", "Criteria must be an existing Markdown file within the repository.");
-        var bytes = File.ReadAllBytes(criteriaFull);
-        if (bytes.Length is 0 or > 32768)
-            throw new CliException("ui.criteria_size", "Criteria file must contain 1 to 32768 bytes.");
-        var criteriaText = Encoding.UTF8.GetString(bytes);
-        var criteria = ParseCriteria(criteriaText);
+        // ADO criteria are a frozen external snapshot. Apply re-checks the ADO revision/hash.
+        AdoUiCriteria.Snapshot? ado = null;
+        string criteriaText;
+        IReadOnlyList<(string Id, string Text)> criteria;
+        string sourcePath;
+        byte[] bytes;
+        if (adoIdText is not null)
+        {
+            if (!int.TryParse(adoIdText, System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out var id) || id <= 0)
+                throw new CliException("ui.ado_id", "--ado-workitem requires a positive numeric work-item ID.");
+            ado = AdoUiCriteria.Read(root, id, context.CancellationToken);
+            criteriaText = ado.CriteriaMarkdown;
+            criteria = ado.Criteria;
+            sourcePath = "ado-workitem:" + id;
+            bytes = Encoding.UTF8.GetBytes(criteriaText);
+        }
+        else
+        {
+            // The input must be tracked with the proposal; no paths or symlinks outside the repository.
+            criteriaPath = criteriaPath!.Replace('\\', '/');
+            if (!PathGuard.IsSafeRelative(criteriaPath))
+                throw new CliException("ui.criteria_path", "Criteria must be a repository-relative Markdown path.");
+            var criteriaFull = Path.Combine(root, criteriaPath);
+            if (!PathGuard.IsWithin(root, criteriaFull) || !File.Exists(criteriaFull) || !criteriaPath.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+                throw new CliException("ui.criteria_path", "Criteria must be an existing Markdown file within the repository.");
+            bytes = File.ReadAllBytes(criteriaFull);
+            if (bytes.Length is 0 or > 32768)
+                throw new CliException("ui.criteria_size", "Criteria file must contain 1 to 32768 bytes.");
+            criteriaText = Encoding.UTF8.GetString(bytes);
+            criteria = ParseCriteria(criteriaText);
+            sourcePath = criteriaPath;
+        }
         if (criteria.Count is 0 or > MaxCriteria)
-            throw new CliException("ui.criteria_count", $"Provide 1 to {MaxCriteria} acceptance criteria as Markdown bullet points.");
+            throw new CliException("ui.criteria_count", $"Provide 1 to {MaxCriteria} acceptance criteria.");
 
         var config = ConfigCommand.Load(Path.Combine(root, "testwizz.json"));
         var output = context.Options.GetValueOrDefault("--out") is { } directory
@@ -126,9 +150,9 @@ public static class UiCommand
         var target = "ui:" + url.PathAndQuery;
         var sourceHash = Hash(bytes);
         var document = new ContextDocument(
-            "ui", new Provenance("playwright-snapshot", "1", CliApp.Version), null,
+            "ui", new Provenance(ado is null ? "playwright-snapshot" : "ado-workitem", ado is null ? "1" : "ado.requirement-context/v1", CliApp.Version), null,
             new TargetInfo("route", target, url.AbsolutePath, null, null, url.PathAndQuery, "public", [], null, []),
-            new SourceInfo(criteriaPath, 1, criteriaText.Count(c => c == '\n') + 1, sourceHash,
+            new SourceInfo(sourcePath, 1, criteriaText.Count(c => c == '\n') + 1, sourceHash,
                 criteriaText, false, null),
             "package.json", [], [], [], [], [], [], []);
         var evidences = criteria.Select(c => new Evidence(c.Id, "acceptance-criterion", null, c.Text)).ToArray();
@@ -146,11 +170,23 @@ public static class UiCommand
         var findings = parsed.Findings.Concat(ProposalChecks.Paths(root, files)).ToList();
         if (!SyntaxValid(code))
             findings.Add(GenerationFinding.Error("ui.syntax", "Generated JavaScript does not parse as an ES module."));
+        var conventions = new JsonObject { ["testProject"] = "package.json", ["framework"] = "playwright", ["verified"] = false };
+        if (ado is not null)
+            conventions["adoWorkItem"] = new JsonObject
+            {
+                ["id"] = ado.Id,
+                ["revision"] = ado.Revision,
+                ["server"] = ado.Server,
+                ["project"] = ado.Project,
+                ["sourceField"] = ado.SourceField,
+                ["webUrl"] = ado.WebUrl,
+                ["sha256"] = ado.Sha256,
+            };
         var generation = new GenerationResult("ui", target, url.PathAndQuery,
             PlanJson.ContextHash(document),
             new GenerationProvenance("local", config.Ai.Model, null, PromptVersion,
                 Hash(Encoding.UTF8.GetBytes(PromptVersion + SystemPrompt))),
-            new JsonObject { ["testProject"] = "package.json", ["framework"] = "playwright", ["verified"] = false },
+            conventions,
             files, tests, parsed.Assumptions, findings);
         var proposal = ProposalBundle.Write(root, output, document, plan, generation);
         context.Output.Result("ui", new JsonObject
@@ -162,6 +198,9 @@ public static class UiCommand
             ["tests"] = tests.Length,
             ["findings"] = findings.Count,
             ["executed"] = false,
+            ["criteriaSource"] = ado is null ? "file" : "ado-workitem",
+            ["workItemId"] = ado?.Id,
+            ["workItemRevision"] = ado?.Revision,
         }, $"UI proposal: {proposal.Directory}\nTests: {tests.Length}; valid: {generation.IsValid}; executed: no.\nReview plan.md and changes.patch before applying.\n",
         generation.IsValid ? "ok" : "failed");
         return generation.IsValid ? ExitCodes.Success : ExitCodes.ValidationFailed;
