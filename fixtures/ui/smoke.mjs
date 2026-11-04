@@ -112,6 +112,25 @@ try {
       let raw = '';
       for await (const part of request) raw += part;
       const prompt = JSON.parse(raw).messages.find(m => m.role === 'user').content;
+      if (prompt.includes('ADO test-case steps:')) {
+        assert.match(prompt, /2\. Action: Enter delivery address/);
+        assert.match(prompt, /3\. Action: Place order/);
+        assert.match(prompt, /Read-only accessible UI snapshot/);
+        const draftResponse = {
+          steps: [
+            { stepId: 2, action: 'fill', label: 'Delivery address', value: 'Dock 3',
+              expectRole: 'heading', expectName: 'Create order' },
+            { stepId: 3, action: 'click', role: 'button', name: 'Place order',
+              expectText: 'Order created' }
+          ],
+          assumptions: ['The confirmation is visible after placing an order.']
+        };
+        response.setHeader('Content-Type', 'application/json');
+        response.writeHead(200).end(JSON.stringify({
+          message: { role: 'assistant', content: JSON.stringify(draftResponse) }, done: true
+        }));
+        return;
+      }
       assert.match(prompt, /AC1: Submitting an order without a delivery address/);
       assert.match(prompt, /AC2: Submitting an order with a delivery address/);
       assert.match(prompt, /Observed UI snapshot/);
@@ -209,6 +228,27 @@ try {
         expectText: 'Order created' }
     ]
   }));
+  // One local-AI, review-first journey draft. Snapshot may only send GET/HEAD.
+  const draftOut = join(temporary, 'draft-proposals');
+  const beforeDraftWrites = writeRequests;
+  const draftRun = await execute('dotnet', [
+    dll, 'journey-draft', project, '--url', appUrl,
+    '--workitem', '4711', '--plan', adoPlan, '--case', '512',
+    '--out', draftOut, '--format', 'json'
+  ], { timeout: 90000, env: { ...process.env, PATH: fakeBin + ':' + process.env.PATH } });
+  const draftResult = JSON.parse(draftRun.stdout);
+  assert.equal(draftResult.status, 'ok');
+  assert.equal(draftResult.result.executed, false);
+  assert.equal(draftResult.result.needsReview, true);
+  const draftSpec = JSON.parse(await readFile(draftResult.result.path, 'utf8'));
+  assert.equal(draftSpec.schema, 'testwizz.journey/v1');
+  assert.deepEqual(draftSpec.steps.map(x => x.stepId), [2, 3]);
+  const reviewText = await readFile(draftResult.result.reviewNotes, 'utf8');
+  assert.match(reviewText, /revision 5/);
+  assert.match(reviewText, /revision 3/);
+  assert.equal(writeRequests, beforeDraftWrites,
+    'Read-only drafting must not submit forms');
+
   const journeyOut = join(temporary, 'journey-evidence');
   const captured = await execute('dotnet', [
     dll, 'journey', project, '--url', appUrl,

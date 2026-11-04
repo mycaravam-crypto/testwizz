@@ -30,6 +30,7 @@ public sealed class CliApp(
         GenerateCommand.Definition,
         UiCommand.Definition,
         JourneyCommand.Definition,
+        JourneyDraftCommand.Definition,
         BootstrapCommand.Definition,
         RunCommand.Definition,
         ApplyCommand.Definition,
