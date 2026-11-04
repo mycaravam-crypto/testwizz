@@ -15,9 +15,25 @@ Status: early development. See [PLAN.md](PLAN.md) for the design and milestones.
 | `testwizz context [path] --for <target>` | Show the `testwizz.context/v1` context for a C# type or method (signature, source excerpt, injected dependencies, thrown exceptions, related tests). |
 | `testwizz plan [path] --for <method> [--ai]` | Plan evidence-linked test scenarios (`testwizz.plan/v1`); `--ai` lets the local model propose more. |
 | `testwizz generate [path] --for <method> [--out <dir>] [--ai-plan]` or `testwizz generate [path] --since <ref> [--list-changed] [--for <method>]` | Plan, let the local model write xUnit tests, validate them and save a proposal bundle outside the repository. The repository is not changed. |
-| `testwizz ui [path] --url <loopback-url> --criteria <file.md>` | Generate review-first Playwright UI proposals from a running local route and explicit acceptance criteria; does not execute tests. |
+| `testwizz ui [path] --url <loopback-url> (--criteria <file.md> \| --ado-workitem <id>)` | Generate review-first Playwright UI proposals from a local route and explicit Markdown or Azure DevOps work-item acceptance criteria; does not execute tests. |
 | `testwizz run [path] --proposal <id> [--no-repair] [--image <image>] [--timeout <s>]` | Build and run a proposal's tests in a Docker/Podman container with the network off, and let the model repair failing tests (bounded). Results go into the bundle. Never runs on the host. |
 | `testwizz apply [path] --proposal <id> [--allow-unverified]` | Copy a proposal's new test files into the repository after stale and overwrite checks. Nothing is committed. |
+
+### UI acceptance criteria from Azure DevOps Server
+
+The existing `--criteria <file.md>` option remains supported. To use the explicit acceptance criteria of an ADO work item directly, install and authenticate the [ado-devops CLI](https://github.com/mycaravam-crypto/ado-devops) first:
+
+```bash
+ado auth status
+ado workitem context 4711
+testwizz ui . --url http://127.0.0.1:5173/checkout --ado-workitem 4711
+```
+
+TestWizz calls `ado workitem context <id>` (read-only, schema `ado.requirement-context/v1`) in the target repository, so the ADO CLI can derive its server/project from the Git remote. It reads only `acceptanceCriteria.items[].text`, not descriptions or linked work items, and requires **1 to 5** explicit criteria. Use `ado workitem context <id> --criteria-field <ref>` to inspect a custom field; the TestWizz adapter currently uses the ADO CLI's default acceptance-criteria field. The two criterion-source options are mutually exclusive.
+
+Each proposal records the ADO work-item ID, server, project, field, current revision and a criteria SHA-256. `testwizz apply` checks the live work item again, refusing when it changed or cannot be verified; `--allow-unverified` does not bypass this check. The criteria snapshot is embedded in the proposal bundle **outside** the repository. Treat proposal output as sensitive when ADO work items contain confidential requirements.
+
+`testwizz ui` only generates review-first Playwright proposals. The current `testwizz run` command does **not** run UI proposals; it currently supports .NET proposals only.
 
 Global options: `--format text|json`, `--help`, `--version`.
 
