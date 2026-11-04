@@ -41,6 +41,76 @@ public class UiCommandTests
         Assert.Equal(2, result.Findings.Count(x => x.Code == "ui.invalid_test"));
     }
 
+    private static string RequirementJson(string items = "[{\"index\":1,\"text\":\"Submit creates an order\"}]", int revision = 4) =>
+        $"""
+        {
+          "schema": "ado.requirement-context/v1",
+          "server": "https://tfs.example.test/tfs/DefaultCollection",
+          "id": 4711,
+          "revision": {{revision}},
+          "currentRevision": 4,
+          "isCurrent": {{(revision == 4 ? "true" : "false")}},
+          "webUrl": "https://tfs.example.test/Platform/_workitems/edit/4711",
+          "project": "Platform",
+          "acceptanceCriteria": {
+            "sourceField": "Microsoft.VSTS.Common.AcceptanceCriteria",
+            "items": {{items}}
+          }
+        }
+        """;
+
+    [Fact]
+    public void AdoCriteria_ParsesStructuredAcceptanceCriteriaWithProvenance()
+    {
+        var result = AdoUiCriteria.Parse(RequirementJson(
+            "[{\"index\":1,\"text\":\"First criterion\"},{\"index\":2,\"text\":\"Second criterion\"}]"), 4711);
+        Assert.Equal(4711, result.Id);
+        Assert.Equal(4, result.Revision);
+        Assert.Equal("AC1", result.Criteria[0].Id);
+        Assert.Equal("Second criterion", result.Criteria[1].Text);
+        Assert.Contains("- First criterion", result.CriteriaMarkdown, StringComparison.Ordinal);
+        Assert.Equal(64, result.Sha256.Length);
+    }
+
+    [Fact]
+    public void AdoCriteria_RejectsMissingCriteria()
+    {
+        var ex = Assert.Throws<CliException>(() => AdoUiCriteria.Parse(RequirementJson("[]"), 4711));
+        Assert.Equal("ui.criteria_count", ex.Code);
+    }
+
+    [Fact]
+    public void AdoCriteria_RejectsWrongWorkItemAndHistoricalRevision()
+    {
+        Assert.Equal("ui.ado_contract",
+            Assert.Throws<CliException>(() => AdoUiCriteria.Parse(RequirementJson(), 4712)).Code);
+        Assert.Equal("ui.ado_revision",
+            Assert.Throws<CliException>(() => AdoUiCriteria.Parse(RequirementJson(revision: 3), 4711)).Code);
+    }
+
+    [Fact]
+    public void AdoCriteria_RejectsMalformedJsonAndInvalidItems()
+    {
+        Assert.Equal("ui.ado_contract",
+            Assert.Throws<CliException>(() => AdoUiCriteria.Parse("{", 4711)).Code);
+        Assert.Equal("ui.ado_contract",
+            Assert.Throws<CliException>(() => AdoUiCriteria.Parse(
+                RequirementJson("[{\"index\":2,\"text\":\"Invalid order\"}]"), 4711)).Code);
+    }
+
+    [Fact]
+    public void Ui_CriteriaSourcesAreMutuallyExclusive()
+    {
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+        var cli = new TestWizz.Cli.CliApp(stdout, stderr, Path.GetTempPath());
+        var exit = cli.Run([
+            "ui", "--url", "http://127.0.0.1:5173/",
+            "--criteria", "criteria.md", "--ado-workitem", "4711", "--format", "json"]);
+        Assert.Equal(2, exit);
+        Assert.Contains("usage", stdout.ToString(), StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("https://localhost:5173/new")]
     [InlineData("http://example.com:5173/new")]
