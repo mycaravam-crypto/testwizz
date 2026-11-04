@@ -57,7 +57,7 @@ public static class UiCommand
 
     public static CommandDefinition Definition { get; } = new(
         "ui",
-        "Generate reviewable Playwright UI tests from a local route and Markdown acceptance criteria. Never executes generated tests.",
+        "Generate reviewable Playwright UI tests from local route and Markdown or ADO work-item acceptance criteria. Never executes generated tests.",
         "testwizz ui [path] --url <local-url> (--criteria <markdown> | --ado-workitem <id>) [--snapshot <json>] [--out <dir>]",
         Options:
         [
