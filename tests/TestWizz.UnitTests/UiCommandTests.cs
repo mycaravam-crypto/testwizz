@@ -42,7 +42,7 @@ public class UiCommandTests
     }
 
     private static string RequirementJson(string items = "[{\"index\":1,\"text\":\"Submit creates an order\"}]", int revision = 4) =>
-        $"""
+        $$"""
         {
           "schema": "ado.requirement-context/v1",
           "server": "https://tfs.example.test/tfs/DefaultCollection",
