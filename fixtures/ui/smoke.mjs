@@ -1,6 +1,7 @@
 // Reproducible vertical slice: real browser + local fake Ollama + TestWizz proposal.
 // The fake model checks integration and traceability, NOT real model reasoning quality.
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -220,10 +221,26 @@ try {
   const journeyManifest = JSON.parse(await readFile(join(journeyResult.result.path, 'manifest.json'), 'utf8'));
   assert.equal(journeyManifest.schema, 'testwizz.ui-evidence/v1');
   assert.equal(journeyManifest.source.relation, 'selected-not-verified');
+  assert.deepEqual(journeyManifest.steps[0].callouts.map(c => c.number), [1, 2],
+    'The first screenshot must annotate both visible, reviewed action locators');
+  assert.deepEqual(journeyManifest.steps[0].callouts.map(c => c.stepId), [2, 3],
+    'Callout numbers follow guide order; ADO step IDs remain in provenance');
+  assert.deepEqual(journeyManifest.steps[1].callouts.map(c => c.number), [1, 2],
+    'Previously used reviewed controls should remain numbered when still visible');
   for (const step of journeyManifest.steps) {
     const screenshot = await readFile(join(journeyResult.result.path, step.screenshot));
     assert.deepEqual([...screenshot.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+    assert.equal(step.sha256, createHash('sha256').update(screenshot).digest('hex'));
     assert.equal(step.result, 'passed');
+    const guide = await readFile(join(journeyResult.result.path, step.guideScreenshot));
+    assert.deepEqual([...guide.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+    assert.equal(step.guideSha256, createHash('sha256').update(guide).digest('hex'));
+    assert.notDeepEqual(guide, screenshot, 'Annotated before-action image differs from after-action evidence');
+    assert.ok(step.callouts.length >= 1);
+    for (const callout of step.callouts) {
+      assert.ok(callout.x >= 0 && callout.x < 1440 && callout.y >= 0 && callout.y < 900);
+      assert.ok(callout.target);
+    }
   }
 
   broken = true;
