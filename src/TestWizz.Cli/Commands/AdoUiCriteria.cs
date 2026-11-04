@@ -124,6 +124,34 @@ public static class AdoUiCriteria
         }
     }
 
+    /// <summary>Fail closed if the external ADO acceptance criteria or identity changed since generation.</summary>
+    public static void CheckUnchanged(string root, System.Text.Json.Nodes.JsonObject manifest, CancellationToken cancellationToken)
+    {
+        if (manifest["conventions"]?["adoWorkItem"] is not System.Text.Json.Nodes.JsonObject source)
+            return;
+        try
+        {
+            var id = (int)source["id"]!;
+            var current = Read(root, id, cancellationToken);
+            if (current.Revision != (int)source["revision"]! ||
+                current.Server != (string)source["server"]! ||
+                current.Project != (string)source["project"]! ||
+                current.SourceField != (string)source["sourceField"]! ||
+                current.Sha256 != (string)source["sha256"]!)
+                throw new CliException("apply.ado_stale",
+                    $"Azure DevOps work item {id} changed since generation. Generate a new UI proposal.");
+        }
+        catch (CliException ex) when (ex.Code != "apply.ado_stale")
+        {
+            throw new CliException("apply.ado_unavailable",
+                "Cannot verify ADO criteria before apply (" + ex.Code + "). No files were applied.");
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FormatException)
+        {
+            throw new CliException("apply.ado_invalid", "The proposal contains invalid ADO source metadata.");
+        }
+    }
+
     private static string Required(JsonElement obj, string property)
     {
         var value = obj.GetProperty(property).GetString();
