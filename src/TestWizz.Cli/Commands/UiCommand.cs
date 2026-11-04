@@ -227,7 +227,7 @@ public static class UiCommand
         return snapshot.GetString()![..Math.Min(snapshot.GetString()!.Length, 14000)];
     }
 
-    private static string CaptureSnapshot(string root, string url, CancellationToken token)
+    internal static string CaptureSnapshot(string root, string url, CancellationToken token)
     {
         if (!File.Exists(Path.Combine(root, "package.json")))
             throw new CliException("ui.playwright_missing", "Target repository must have a package.json with @playwright/test installed.");

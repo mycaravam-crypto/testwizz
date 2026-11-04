@@ -17,6 +17,7 @@ Status: early development. See [PLAN.md](PLAN.md) for the design and milestones.
 | `testwizz generate [path] --for <method> [--out <dir>] [--ai-plan]` or `testwizz generate [path] --since <ref> [--list-changed] [--for <method>]` | Plan, let the local model write xUnit tests, validate them and save a proposal bundle outside the repository. The repository is not changed. |
 | `testwizz ui [path] --url <loopback-url> (--criteria <file.md> \| --ado-workitem <id>)` | Generate review-first Playwright UI proposals from a local route and explicit Markdown or Azure DevOps work-item acceptance criteria; does not execute tests. |
 | `testwizz journey [path] --url <loopback-url> --workitem <id> --plan <ado-plan.json> --case <id> --steps <reviewed.json>` | Capture step screenshots and assertion evidence from a reviewed ADO test case; does not execute AI-generated code. |
+| `testwizz journey-draft [path] --url <loopback-url> --workitem <id> --plan <ado-plan.json> --case <id>` | Have the configured local AI propose reviewed declarative browser steps from the ADO case and accessible UI snapshot; never executes tests. |
 | `testwizz run [path] --proposal <id> [--no-repair] [--image <image>] [--timeout <s>]` | Build and run a proposal's tests in a Docker/Podman container with the network off, and let the model repair failing tests (bounded). Results go into the bundle. Never runs on the host. |
 | `testwizz apply [path] --proposal <id> [--allow-unverified]` | Copy a proposal's new test files into the repository after stale and overwrite checks. Nothing is committed. |
 
@@ -37,6 +38,18 @@ Each proposal records the ADO work-item ID, server, project, field, current revi
 `testwizz ui` only generates review-first Playwright proposals. The current `testwizz run` command does **not** run UI proposals; it currently supports .NET proposals only.
 
 
+### Draft a journey directly from ADO with local AI
+
+Instead of writing every reviewed locator from scratch, TestWizz can **propose** a `testwizz.journey/v1` file using an exported ADO test case and a read-only accessible Playwright snapshot of the running local route:
+
+```bash
+ado testplan export 12 --output ../ado-plan.json
+testwizz journey-draft . --url http://127.0.0.1:5173/orders \
+  --workitem 4711 --plan ../ado-plan.json --case 512 \
+  --out ../journey-drafts
+```
+
+The output contains `journey.json` and `review.md` **outside the repository**. TestWizz validates that model-proposed `click`/`fill` actions, selectors and visibility assertions match every explicit ADO step ID and order. Uncertain selectors and other assumptions remain human review items. **No browser actions or test execution occur in this command**; only read-only GET/HEAD observations are permitted. Inspect both files, replace all example values with safe synthetic data, then copy the reviewed JSON to the repository and run `testwizz journey` as documented below. Missing or unsupported ADO case steps fail closed. This is a one-case incremental helper, not automatic end-to-end test planning or proof of acceptance.
 ### Screenshot evidence from reviewed ADO test-case steps
 
 First use `testwizz ui --ado-workitem <id>` to propose Playwright tests with the configured local AI. Review the intended interactions. Then export the linked ADO test plan and record the reviewed interactions in a small declarative `journey.json` (not generated JavaScript).
