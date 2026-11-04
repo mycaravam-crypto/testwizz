@@ -107,7 +107,7 @@ public class UiCommandTests
         var cli = new TestWizz.Cli.CliApp(stdout, stderr, Path.GetTempPath());
         var exit = cli.Run([
             "ui", "--url", "http://127.0.0.1:5173/",
-            "--criteria", "criteria.md", "--ado-workitem", "4711", "--format", "json"]);
+            "--criteria", "criteria.md", "--ado-workitem", "4711", "--format", "json"], TestContext.Current.CancellationToken);
         Assert.Equal(2, exit);
         Assert.Contains("usage", stdout.ToString(), StringComparison.Ordinal);
     }
