@@ -1,3 +1,4 @@
+using TestWizz.Cli;
 using System.Text.Json.Nodes;
 using TestWizz.Cli.Commands;
 
