@@ -53,6 +53,7 @@ public static class ApplyCommand
         try
         {
             proposal = ProposalReader.Load(ProposalReader.Resolve(reference!, output, context.WorkingDirectory));
+            AdoUiCriteria.CheckUnchanged(root, proposal.Manifest, context.CancellationToken);
             files = ProposalApplier.Apply(root, proposal, context.Has(AllowUnverifiedOption));
         }
         catch (ProposalException ex)
@@ -103,10 +104,17 @@ public static class ApplyCommand
             {
                 var proposal = ProposalReader.Load(directory);
                 id = proposal.Id;
+                AdoUiCriteria.CheckUnchanged(root, proposal.Manifest, context.CancellationToken);
                 files = ProposalApplier.Apply(root, proposal, allowUnverified);
                 status = "applied";
                 applied++;
                 filesApplied += files.Count;
+            }
+            catch (CliException ex)
+            {
+                status = "skipped";
+                reason = ex.Code + ": " + ex.Message;
+                skipped++;
             }
             catch (ProposalException ex)
             {
