@@ -269,7 +269,11 @@ public static class ProposalBundle
     /// <summary>Repository files the proposal was derived from; <c>apply</c> refuses when any of them changed.</summary>
     private static IEnumerable<(string Path, string Sha256)> Sources(string root, ContextDocument context)
     {
-        var sources = new SortedDictionary<string, string>(StringComparer.Ordinal) { [context.Source.File] = context.Source.Sha256 };
+        // ADO criteria are external evidence, not a repository file. Their revision and
+        // content hash live in conventions. Apply checks them against the live ADO work item.
+        var sources = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        if (context.Provenance.Provider != "ado-workitem")
+            sources[context.Source.File] = context.Source.Sha256;
         foreach (var file in context.Dependencies.Select(d => d.DeclaredIn?.File).OfType<string>().Where(f => !sources.ContainsKey(f)))
         {
             var path = Path.Combine(root, file.Replace('/', Path.DirectorySeparatorChar));
