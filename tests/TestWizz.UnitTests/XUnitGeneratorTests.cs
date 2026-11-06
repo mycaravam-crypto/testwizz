@@ -89,7 +89,7 @@ public sealed class XUnitConventionsTests : IDisposable
     {
         foreach (var directory in _cleanup)
         {
-            Directory.Delete(directory, recursive: true);
+            TestTempDirectories.Delete(directory);
         }
     }
 
@@ -222,7 +222,7 @@ public sealed class XUnitValidatorTests : IDisposable
 {
     private readonly string _fixture = RepoPaths.CopyToTemp(RepoPaths.DotNetFixture);
 
-    public void Dispose() => Directory.Delete(_fixture, recursive: true);
+    public void Dispose() => TestTempDirectories.Delete(_fixture);
 
     private GenerationResult Assemble(string target, string code)
     {
@@ -394,8 +394,8 @@ public sealed class XUnitGeneratorTests : IAsyncLifetime
     public async ValueTask DisposeAsync()
     {
         await _server.DisposeAsync();
-        Directory.Delete(_fixture, recursive: true);
-        Directory.Delete(_proposals, recursive: true);
+        TestTempDirectories.Delete(_fixture);
+        TestTempDirectories.Delete(_proposals);
     }
 
     private static string Reply(string code, params string[] assumptions) => new JsonObject
