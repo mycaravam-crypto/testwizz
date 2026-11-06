@@ -58,7 +58,7 @@ public sealed class RoslynContextProviderTests : IDisposable
     {
         foreach (var directory in _cleanup)
         {
-            Directory.Delete(directory, recursive: true);
+            TestTempDirectories.Delete(directory);
         }
     }
 
@@ -330,7 +330,7 @@ public sealed class ContextCommandTests : IDisposable
 {
     private readonly string _fixture = RepoPaths.CopyToTemp(RepoPaths.DotNetFixture);
 
-    public void Dispose() => Directory.Delete(_fixture, recursive: true);
+    public void Dispose() => TestTempDirectories.Delete(_fixture);
 
     private (int ExitCode, string Stdout, string Stderr) Run(params string[] args)
     {

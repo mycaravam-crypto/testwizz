@@ -80,8 +80,8 @@ public sealed class RunCommandTests : IDisposable
 
     public void Dispose()
     {
-        Directory.Delete(_fixture, recursive: true);
-        Directory.Delete(_proposals, recursive: true);
+        TestTempDirectories.Delete(_fixture);
+        TestTempDirectories.Delete(_proposals);
     }
 
     private (int ExitCode, JsonNode Json) Run(string bundle, params string[] extra)
@@ -350,8 +350,8 @@ public sealed class DockerRunTests : IDisposable
 
     public void Dispose()
     {
-        Directory.Delete(_fixture, recursive: true);
-        Directory.Delete(_proposals, recursive: true);
+        TestTempDirectories.Delete(_fixture);
+        TestTempDirectories.Delete(_proposals);
     }
 
     private static void RequireDocker() =>

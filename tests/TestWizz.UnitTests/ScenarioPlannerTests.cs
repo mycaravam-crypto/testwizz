@@ -19,7 +19,7 @@ public sealed class CSharpScenarioExtractorTests : IDisposable
     {
         foreach (var directory in _cleanup)
         {
-            Directory.Delete(directory, recursive: true);
+            TestTempDirectories.Delete(directory);
         }
     }
 
@@ -271,7 +271,7 @@ public sealed class ScenarioEnricherTests : IAsyncLifetime
     public async ValueTask DisposeAsync()
     {
         await _server.DisposeAsync();
-        Directory.Delete(_fixture, recursive: true);
+        TestTempDirectories.Delete(_fixture);
     }
 
     private (ContextDocument Context, ExtractionResult Extraction) Extract(string target)
@@ -419,7 +419,7 @@ public sealed class PlanCommandTests : IAsyncLifetime
     public async ValueTask DisposeAsync()
     {
         await _server.DisposeAsync();
-        Directory.Delete(_fixture, recursive: true);
+        TestTempDirectories.Delete(_fixture);
     }
 
     private (int ExitCode, string Stdout, string Stderr) Run(params string[] args)

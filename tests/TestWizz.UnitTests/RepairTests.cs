@@ -74,8 +74,8 @@ public sealed class RepairLoopTests : IAsyncLifetime
     public async ValueTask DisposeAsync()
     {
         await _server.DisposeAsync();
-        Directory.Delete(_fixture, recursive: true);
-        Directory.Delete(_proposals, recursive: true);
+        TestTempDirectories.Delete(_fixture);
+        TestTempDirectories.Delete(_proposals);
     }
 
     private static string Reply(string code, params string[] changes) => new JsonObject
@@ -248,8 +248,8 @@ public sealed class ApplyCommandTests : IDisposable
 
     public void Dispose()
     {
-        Directory.Delete(_fixture, recursive: true);
-        Directory.Delete(_proposals, recursive: true);
+        TestTempDirectories.Delete(_fixture);
+        TestTempDirectories.Delete(_proposals);
     }
 
     private (int ExitCode, JsonNode Json) Apply(string bundle, params string[] extra)
@@ -378,15 +378,15 @@ public sealed class ApplyCommandTests : IDisposable
                 File.Copy(file, Path.Combine(outside, Path.GetFileName(file)));
             }
 
-            Directory.Delete(tests, recursive: true);
-            Directory.CreateSymbolicLink(tests, outside);
+            TestTempDirectories.Delete(tests);
+            TestSymlinks.CreateDirectoryLink(tests, outside);
 
             Assert.Equal("apply.path_escape", (string)Apply(bundle, "--allow-unverified").Json["error"]!["code"]!);
             Assert.False(File.Exists(Path.Combine(outside, "CalculatorDivideTests.cs")));
         }
         finally
         {
-            Directory.Delete(outside, recursive: true);
+            TestTempDirectories.Delete(outside);
         }
     }
 }

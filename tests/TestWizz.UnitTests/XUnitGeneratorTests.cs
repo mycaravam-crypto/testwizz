@@ -11,7 +11,7 @@ namespace TestWizz.UnitTests;
 /// <summary>Model output used by the fake model server: valid tests in the fixture's style.</summary>
 internal static class CannedTests
 {
-    public const string Divide = """
+    public static readonly string Divide = """
         namespace Shop.Tests;
 
         public class CalculatorDivideTests
@@ -41,9 +41,9 @@ internal static class CannedTests
                 Assert.Equal(expected, _calculator.Divide(dividend, 1));
             }
         }
-        """;
+        """.ReplaceLineEndings("\n");
 
-    public const string PlaceOrder = """
+    public static readonly string PlaceOrder = """
         using NSubstitute;
 
         namespace Shop.Tests;
@@ -75,7 +75,7 @@ internal static class CannedTests
                 await Assert.ThrowsAsync<ArgumentNullException>(() => service.PlaceOrderAsync(Guid.NewGuid(), null!));
             }
         }
-        """;
+        """.ReplaceLineEndings("\n");
 }
 
 public sealed class XUnitConventionsTests : IDisposable
@@ -89,7 +89,7 @@ public sealed class XUnitConventionsTests : IDisposable
     {
         foreach (var directory in _cleanup)
         {
-            Directory.Delete(directory, recursive: true);
+            TestTempDirectories.Delete(directory);
         }
     }
 
@@ -222,7 +222,7 @@ public sealed class XUnitValidatorTests : IDisposable
 {
     private readonly string _fixture = RepoPaths.CopyToTemp(RepoPaths.DotNetFixture);
 
-    public void Dispose() => Directory.Delete(_fixture, recursive: true);
+    public void Dispose() => TestTempDirectories.Delete(_fixture);
 
     private GenerationResult Assemble(string target, string code)
     {
@@ -394,8 +394,8 @@ public sealed class XUnitGeneratorTests : IAsyncLifetime
     public async ValueTask DisposeAsync()
     {
         await _server.DisposeAsync();
-        Directory.Delete(_fixture, recursive: true);
-        Directory.Delete(_proposals, recursive: true);
+        TestTempDirectories.Delete(_fixture);
+        TestTempDirectories.Delete(_proposals);
     }
 
     private static string Reply(string code, params string[] assumptions) => new JsonObject
