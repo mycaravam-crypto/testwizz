@@ -8,6 +8,37 @@ using TestWizz.DotNet;
 
 namespace TestWizz.UnitTests;
 
+
+internal static class TestSymlinks
+{
+    // ERROR_PRIVILEGE_NOT_HELD: Windows needs Developer Mode or an assigned symlink privilege.
+    private const int PrivilegeNotHeld = 1314;
+
+    public static void CreateDirectoryLink(string link, string target)
+    {
+        try
+        {
+            Directory.CreateSymbolicLink(link, target);
+        }
+        catch (IOException ex) when (OperatingSystem.IsWindows() && (ex.HResult & 0xFFFF) == PrivilegeNotHeld)
+        {
+            Assert.Skip("Creating symbolic links requires Windows Developer Mode or SeCreateSymbolicLinkPrivilege.");
+        }
+    }
+
+    public static void CreateFileLink(string link, string target)
+    {
+        try
+        {
+            System.IO.File.CreateSymbolicLink(link, target);
+        }
+        catch (IOException ex) when (OperatingSystem.IsWindows() && (ex.HResult & 0xFFFF) == PrivilegeNotHeld)
+        {
+            Assert.Skip("Creating symbolic links requires Windows Developer Mode or SeCreateSymbolicLinkPrivilege.");
+        }
+    }
+}
+
 public sealed class PathGuardTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("testwizz-guard-").FullName;
@@ -49,7 +80,7 @@ public sealed class PathGuardTests : IDisposable
     [Fact]
     public void SymlinkedFolderPointingOutside_IsAnEscape()
     {
-        Directory.CreateSymbolicLink(Path.Combine(_root, "tests"), _outside);
+        TestSymlinks.CreateDirectoryLink(Path.Combine(_root, "tests"), _outside);
 
         Assert.Equal(["path-escape"], Codes(File("tests/FooTests.cs")));
     }
@@ -58,7 +89,7 @@ public sealed class PathGuardTests : IDisposable
     public void SymlinkedFolderInsideRepository_IsAllowed()
     {
         Directory.CreateDirectory(Path.Combine(_root, "real"));
-        Directory.CreateSymbolicLink(Path.Combine(_root, "tests"), Path.Combine(_root, "real"));
+        TestSymlinks.CreateDirectoryLink(Path.Combine(_root, "tests"), Path.Combine(_root, "real"));
 
         Assert.Empty(Codes(File("tests/FooTests.cs")));
     }
@@ -67,7 +98,7 @@ public sealed class PathGuardTests : IDisposable
     public void ExistingFilesAndDanglingLinks_AreNeverOverwritten()
     {
         System.IO.File.WriteAllText(Path.Combine(_root, "Existing.cs"), "");
-        System.IO.File.CreateSymbolicLink(Path.Combine(_root, "Dangling.cs"), Path.Combine(_root, "missing.cs"));
+        TestSymlinks.CreateFileLink(Path.Combine(_root, "Dangling.cs"), Path.Combine(_root, "missing.cs"));
 
         Assert.Equal(["file-exists", "file-exists"], Codes(File("Existing.cs"), File("Dangling.cs")));
     }
@@ -79,7 +110,7 @@ public sealed class PathGuardTests : IDisposable
     public void OutputDirectoryThroughSymlinkIntoRepository_IsInside()
     {
         var link = Path.Combine(_outside, "proposals");
-        Directory.CreateSymbolicLink(link, _root);
+        TestSymlinks.CreateDirectoryLink(link, _root);
 
         Assert.True(PathGuard.IsWithin(_root, Path.Combine(link, "x")));
         Assert.False(PathGuard.IsWithin(_root, Path.Combine(_outside, "x")));
@@ -299,7 +330,11 @@ public sealed class ProposalBundleTests : IAsyncLifetime
             expectedManifest.Remove(field);
             actualManifest.Remove(field);
         }
-        Assert.True(JsonNode.DeepEquals(expectedManifest, actualManifest));
+        var differingManifestFields = expectedManifest.Select(property => property.Key)
+            .Union(actualManifest.Select(property => property.Key))
+            .Where(key => !JsonNode.DeepEquals(expectedManifest[key], actualManifest[key]));
+        Assert.True(JsonNode.DeepEquals(expectedManifest, actualManifest),
+            "Manifest fields differ: " + string.Join(", ", differingManifestFields));
         foreach (var file in BundleFiles(bundle).Where(file => file != "manifest.json"))
         {
             var expected = File.ReadAllText(Path.Combine(golden, file)).ReplaceLineEndings("\n");
@@ -358,7 +393,8 @@ public sealed class ProposalBundleTests : IAsyncLifetime
         git.WaitForExit();
 
         Assert.True(git.ExitCode == 0, error);
-        Assert.Equal(before, File.ReadAllText(Path.Combine(_fixture, "tests", "Shop.Tests", "CalculatorDivideTests.cs")));
+        Assert.Equal(before.ReplaceLineEndings("\n"),
+            File.ReadAllText(Path.Combine(_fixture, "tests", "Shop.Tests", "CalculatorDivideTests.cs")).ReplaceLineEndings("\n"));
     }
 
     [Fact]
@@ -384,7 +420,7 @@ public sealed class ProposalBundleTests : IAsyncLifetime
     public void OutputLinkedIntoRepository_IsRefused()
     {
         var link = Path.Combine(_proposals, "link");
-        Directory.CreateSymbolicLink(link, _fixture);
+        TestSymlinks.CreateDirectoryLink(link, _fixture);
 
         var (exit, stdout, _) = Run("generate", "--for", "Calculator.Divide", "--out", link, "--format", "json");
 
