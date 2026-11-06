@@ -1,1 +1,2 @@
 tests/TestWizz.UnitTests/Golden/** text eol=lf
+tests/TestWizz.UnitTests/*.cs text eol=lf
