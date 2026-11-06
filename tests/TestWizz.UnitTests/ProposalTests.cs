@@ -8,37 +8,6 @@ using TestWizz.DotNet;
 
 namespace TestWizz.UnitTests;
 
-
-internal static class TestSymlinks
-{
-    // ERROR_PRIVILEGE_NOT_HELD: Windows needs Developer Mode or an assigned symlink privilege.
-    private const int PrivilegeNotHeld = 1314;
-
-    public static void CreateDirectoryLink(string link, string target)
-    {
-        try
-        {
-            Directory.CreateSymbolicLink(link, target);
-        }
-        catch (IOException ex) when (OperatingSystem.IsWindows() && (ex.HResult & 0xFFFF) == PrivilegeNotHeld)
-        {
-            Assert.Skip("Creating symbolic links requires Windows Developer Mode or SeCreateSymbolicLinkPrivilege.");
-        }
-    }
-
-    public static void CreateFileLink(string link, string target)
-    {
-        try
-        {
-            System.IO.File.CreateSymbolicLink(link, target);
-        }
-        catch (IOException ex) when (OperatingSystem.IsWindows() && (ex.HResult & 0xFFFF) == PrivilegeNotHeld)
-        {
-            Assert.Skip("Creating symbolic links requires Windows Developer Mode or SeCreateSymbolicLinkPrivilege.");
-        }
-    }
-}
-
 public sealed class PathGuardTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("testwizz-guard-").FullName;
@@ -46,8 +15,8 @@ public sealed class PathGuardTests : IDisposable
 
     public void Dispose()
     {
-        Directory.Delete(_root, recursive: true);
-        Directory.Delete(_outside, recursive: true);
+        TestTempDirectories.Delete(_root);
+        TestTempDirectories.Delete(_outside);
     }
 
     [Theory]
@@ -122,7 +91,7 @@ public sealed class TestQualityTests : IDisposable
 {
     private readonly string _fixture = RepoPaths.CopyToTemp(RepoPaths.DotNetFixture);
 
-    public void Dispose() => Directory.Delete(_fixture, recursive: true);
+    public void Dispose() => TestTempDirectories.Delete(_fixture);
 
     private GenerationResult Assemble(string body, string target = "Calculator.Divide")
     {
@@ -272,8 +241,8 @@ public sealed class ProposalBundleTests : IAsyncLifetime
     public async ValueTask DisposeAsync()
     {
         await _server.DisposeAsync();
-        Directory.Delete(_fixture, recursive: true);
-        Directory.Delete(_proposals, recursive: true);
+        TestTempDirectories.Delete(_fixture);
+        TestTempDirectories.Delete(_proposals);
     }
 
     private (int ExitCode, string Stdout, string Stderr) Run(params string[] args)
