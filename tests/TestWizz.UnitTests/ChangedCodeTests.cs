@@ -39,7 +39,7 @@ public sealed class ChangedCodeTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            TestTempDirectories.Delete(root);
         }
     }
 
