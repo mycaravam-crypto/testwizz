@@ -46,7 +46,7 @@ public static class XUnitRepairer
         - Keep the namespace, class name and packages.
         List what you changed in "changes".
         Reply only with JSON that matches the provided schema.
-        """;
+        """.ReplaceLineEndings("\n");
 
     public static readonly JsonObject Schema = new()
     {
