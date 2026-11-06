@@ -11,7 +11,7 @@ namespace TestWizz.UnitTests;
 /// <summary>Model output used by the fake model server: valid tests in the fixture's style.</summary>
 internal static class CannedTests
 {
-    public const string Divide = """
+    public static readonly string Divide = """
         namespace Shop.Tests;
 
         public class CalculatorDivideTests
@@ -41,9 +41,9 @@ internal static class CannedTests
                 Assert.Equal(expected, _calculator.Divide(dividend, 1));
             }
         }
-        """;
+        """.ReplaceLineEndings("\n");
 
-    public const string PlaceOrder = """
+    public static readonly string PlaceOrder = """
         using NSubstitute;
 
         namespace Shop.Tests;
@@ -75,7 +75,7 @@ internal static class CannedTests
                 await Assert.ThrowsAsync<ArgumentNullException>(() => service.PlaceOrderAsync(Guid.NewGuid(), null!));
             }
         }
-        """;
+        """.ReplaceLineEndings("\n");
 }
 
 public sealed class XUnitConventionsTests : IDisposable
