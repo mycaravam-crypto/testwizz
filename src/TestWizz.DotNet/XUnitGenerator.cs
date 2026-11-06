@@ -42,7 +42,7 @@ public static class XUnitGenerator
         - Follow the naming pattern and style of the example test file.
         List every assumption you had to make (for example a chosen input value) in "assumptions".
         Reply only with JSON that matches the provided schema.
-        """;
+        """.ReplaceLineEndings("\n");
 
     public static readonly JsonObject Schema = new()
     {
