@@ -55,7 +55,7 @@ public sealed class SecurityRegressionTests
         var outside = Directory.CreateTempSubdirectory("testwizz-security-outside-").FullName;
         try
         {
-            Directory.CreateSymbolicLink(Path.Combine(root, "tests"), outside);
+            TestSymlinks.CreateDirectoryLink(Path.Combine(root, "tests"), outside);
             Assert.False(PathGuard.IsWithin(root, Path.Combine(root, "tests", "Escape.cs")));
         }
         finally
