@@ -60,8 +60,8 @@ public sealed class SecurityRegressionTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
-            Directory.Delete(outside, recursive: true);
+            TestTempDirectories.Delete(root);
+            TestTempDirectories.Delete(outside);
         }
     }
 }
