@@ -37,7 +37,7 @@ public static class ScenarioEnricher
           uncertain, describe the uncertainty in reviewReason.
         - Do not repeat planned scenarios. Propose at most {MaxAiScenarios}; propose none if nothing is missing.
         - Reply only with JSON that matches the provided schema.
-        """;
+        """.ReplaceLineEndings("\n");
 
     public static readonly JsonObject Schema = new()
     {
