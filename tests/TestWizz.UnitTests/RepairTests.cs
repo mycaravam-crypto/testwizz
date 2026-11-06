@@ -379,7 +379,7 @@ public sealed class ApplyCommandTests : IDisposable
             }
 
             Directory.Delete(tests, recursive: true);
-            Directory.CreateSymbolicLink(tests, outside);
+            TestSymlinks.CreateDirectoryLink(tests, outside);
 
             Assert.Equal("apply.path_escape", (string)Apply(bundle, "--allow-unverified").Json["error"]!["code"]!);
             Assert.False(File.Exists(Path.Combine(outside, "CalculatorDivideTests.cs")));
