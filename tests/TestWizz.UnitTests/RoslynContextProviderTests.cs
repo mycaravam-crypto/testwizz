@@ -6,39 +6,6 @@ using TestWizz.DotNet;
 
 namespace TestWizz.UnitTests;
 
-
-internal static class TestTempDirectories
-{
-    public static void Delete(string path)
-    {
-        if (!Directory.Exists(path))
-        {
-            return;
-        }
-
-        // Git can create read-only object files on Windows, which block recursive deletion.
-        // Do not follow reparse points when clearing attributes in temporary test repositories.
-        if (OperatingSystem.IsWindows())
-        {
-            var options = new EnumerationOptions
-            {
-                RecurseSubdirectories = true,
-                AttributesToSkip = FileAttributes.ReparsePoint,
-            };
-            foreach (var file in Directory.EnumerateFiles(path, "*", options))
-            {
-                var attributes = System.IO.File.GetAttributes(file);
-                if ((attributes & FileAttributes.ReadOnly) != 0)
-                {
-                    System.IO.File.SetAttributes(file, attributes & ~FileAttributes.ReadOnly);
-                }
-            }
-        }
-
-        Directory.Delete(path, recursive: true);
-    }
-}
-
 internal static class RepoPaths
 {
     public static string Root { get; } = FindRoot();
@@ -363,7 +330,7 @@ public sealed class ContextCommandTests : IDisposable
 {
     private readonly string _fixture = RepoPaths.CopyToTemp(RepoPaths.DotNetFixture);
 
-    public void Dispose() => Directory.Delete(_fixture, recursive: true);
+    public void Dispose() => TestTempDirectories.Delete(_fixture);
 
     private (int ExitCode, string Stdout, string Stderr) Run(params string[] args)
     {
