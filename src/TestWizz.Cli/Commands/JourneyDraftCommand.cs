@@ -151,7 +151,8 @@ public static class JourneyDraftCommand
         try { ProposalBundle.EnsureOutsideRepository(root, output); }
         catch (ProposalException ex) { throw new CliException(ex.Code, ex.Message); }
 
-        string snapshot = UiCommand.CaptureSnapshot(root, url.ToString(), context.CancellationToken);
+        string snapshot = context.Options.TryGetValue("--batch-snapshot", out var cached) && cached is not null
+            ? cached : UiCommand.CaptureSnapshot(root, url.ToString(), context.CancellationToken);
         var prompt = new StringBuilder()
             .Append("Route: ").Append(url.PathAndQuery)
             .Append("\nADO test-case title: ").Append(PromptData.Neutralize(testCase.Title))
@@ -169,7 +170,8 @@ public static class JourneyDraftCommand
         JsonObject response;
         try
         {
-            using var model = ModelClient.Create(config.Ai, context.GetEnvironmentVariable);
+            using var owned = context.SharedModel is null ? ModelClient.Create(config.Ai, context.GetEnvironmentVariable) : null;
+            var model = context.SharedModel ?? owned!;
             response = model.CompleteJsonAsync(
                 new JsonChatRequest(SystemPrompt, prompt.ToString(), "testwizz_journey_draft", ResponseSchema),
                 context.CancellationToken).GetAwaiter().GetResult().Content;

@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using TestWizz.AI;
 using TestWizz.Core.Configuration;
 using TestWizz.Core.Proposals;
 
@@ -112,6 +113,13 @@ public static class JourneyDraftBatch
         File.WriteAllText(planPath, planJson);
         File.WriteAllText(Path.Combine(runFolder, "ado-trace.json"), traceJson);
 
+        // Capture the read-only route once and reuse one local-model connection for the batch.
+        // The requested route is explicit and never inferred from untrusted ADO text.
+        var snapshot = !listOnly && selection.Links.Count > 0
+            ? UiCommand.CaptureSnapshot(root, url!, context.CancellationToken) : null;
+        using var model = !listOnly && selection.Links.Count > 0
+            ? ModelClient.Create(config.Ai, context.GetEnvironmentVariable) : null;
+
         var items = new JsonArray();
         var drafted = 0;
         var skipped = 0;
@@ -146,6 +154,8 @@ public static class JourneyDraftBatch
 
                 // Call the existing, validated one-case command in-process. It never executes
                 // browser actions and guarantees schema/step order before saving a draft.
+                context.Output.Stderr.WriteLine("testwizz journey-draft: preparing WI " +
+                    link.WorkItemId + " / case " + caseId);
                 using var writer = new StringWriter(CultureInfo.InvariantCulture);
                 var options = new Dictionary<string, string?>(StringComparer.Ordinal)
                 {
@@ -155,11 +165,13 @@ public static class JourneyDraftBatch
                     ["--plan"] = planPath,
                     ["--out"] = output,
                     ["--ado-link-confirmed"] = null, // internal marker, not exposed by the CLI parser
+                    ["--batch-snapshot"] = snapshot, // internal in-memory cache, never written to disk
                 };
                 var child = context with
                 {
                     Options = options,
                     Output = new CliOutput(writer, context.Output.Stderr, OutputFormat.Json),
+                    SharedModel = model,
                 };
                 try
                 {
