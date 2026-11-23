@@ -5,12 +5,16 @@ import fs from 'node:fs';
 export async function openContext(browser, target, options, storageFile) {
   if (!storageFile) return browser.newContext(options);
   const saved = JSON.parse(fs.readFileSync(storageFile, 'utf8'));
-  const origins = (saved.origins ?? []).filter(entry => entry.origin === target.origin);
+  const origins = (saved.origins ?? []).filter(entry => {
+    try { return new URL(entry.origin).origin === target.origin; }
+    catch { return false; }
+  });
   const cookies = (saved.cookies ?? []).filter(cookie =>
     cookie.domain?.replace(/^\./, '').toLowerCase() === target.hostname.toLowerCase());
   const context = await browser.newContext({
     ...options,
-    storageState: { cookies, origins: origins.map(({ origin, localStorage }) => ({ origin, localStorage })) }
+    storageState: { cookies, origins: origins.map(({ localStorage }) =>
+      ({ origin: target.origin, localStorage })) }
   });
   const session = origins.flatMap(entry => entry.sessionStorage ?? []);
   if (session.length) {

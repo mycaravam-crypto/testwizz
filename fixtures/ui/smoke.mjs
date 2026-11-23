@@ -334,7 +334,7 @@ try {
   const protectedUrl = origin + '/secured';
   await writeFile(join(stateDir, 'docwizz-state.json'), JSON.stringify({
     cookies: [],
-    origins: [{ origin, localStorage: [], sessionStorage: [{ name: 'accessToken', value: jwt }] }]
+    origins: [{ origin: origin + '/', localStorage: [], sessionStorage: [{ name: 'accessToken', value: jwt }] }]
   }));
   const env = { ...process.env, PATH: fakeBin + ':' + process.env.PATH,
     TESTWIZZ_STORAGE_STATE: '.auth/docwizz-state.json' };

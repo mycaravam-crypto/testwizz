@@ -18,7 +18,9 @@ public sealed class BrowserStorageStateTests
         Directory.CreateDirectory(Path.Combine(root, ".auth"));
         try
         {
-            File.WriteAllText(Path.Combine(root, ".auth", "docwizz-state.json"), SessionState);
+            // DocWizz accepts a trailing slash on the saved origin.
+            File.WriteAllText(Path.Combine(root, ".auth", "docwizz-state.json"),
+                SessionState.Replace("5173\\"", "5173/\\"", StringComparison.Ordinal));
             Assert.Equal(Path.GetFullPath(Path.Combine(root, ".auth", "docwizz-state.json")),
                 BrowserStorageState.Resolve(root, Url, ".auth/docwizz-state.json"));
             Assert.Null(BrowserStorageState.Resolve(root, Url, null));
