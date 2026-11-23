@@ -72,7 +72,7 @@ Start with the fewest projects that work; split only when a second consumer appe
 | C#/xUnit | Context, scenarios, proposal generation, isolated run/repair, explicit apply, changed-method and bootstrap batches | No automatic source edits or coverage guarantee |
 | Vue 3 | SFC/composable/store context and scenario planning | No Vitest generation or runner |
 | UI criteria | Review-first Playwright proposals from Markdown or an ADO work item | `testwizz run` supports .NET only |
-| ADO journeys | `journey-draft --plan-id` resolves explicit Tested By links and drafts each linked case; `journey` captures approved evidence | Requires a configured local route; no automatic approval, login or per-case route discovery |
+| ADO journeys | `journey-draft --plan-id` resolves explicit Tested By links and drafts each linked case; `journey` captures approved evidence | Requires a configured local route and optional DocWizz session-state file; no automatic approval, interactive login or per-case route discovery |
 
 For commands use [README](README.md), for setup [Getting started](docs/getting-started.md), and for the ADO → TestWizz → DocWizz workflow [ADO journeys](docs/ado-journeys.md).
 

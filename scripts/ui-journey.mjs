@@ -1,9 +1,10 @@
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
+import { openContext, monitorAuthentication } from './ui-auth.mjs';
 
 // Reviewed locators only. The browser never evaluates AI-generated code.
-const [root, address, file, output] = process.argv.slice(2);
+const [root, address, file, output, storageFile] = process.argv.slice(2);
 const target = new URL(address);
 if (target.protocol !== 'http:' || !['localhost', '127.0.0.1', '[::1]'].includes(target.hostname))
   throw Error('Only local test applications are supported');
@@ -88,16 +89,18 @@ async function captureAnnotated(page, file, markers) {
 }
 
 try {
-  const context = await browser.newContext({
+  const context = await openContext(browser, target, {
     viewport: { width: 1440, height: 900 }, serviceWorkers: 'block'
-  });
+  }, storageFile);
   await context.routeWebSocket('**/*', socket => socket.close());
   await context.route('**/*', route => {
     const request = new URL(route.request().url());
     return request.origin === target.origin ? route.continue() : route.abort();
   });
   const page = await context.newPage();
-  await page.goto(address, { waitUntil: 'domcontentloaded', timeout: 12000 });
+  const auth = monitorAuthentication(page, target, storageFile);
+  const navigation = await page.goto(address, { waitUntil: 'domcontentloaded', timeout: 12000 });
+  await auth.check(navigation, true);
   const ids = [];
   const guides = [];
   for (let i = 0; i < definition.steps.length; i++) {
@@ -124,6 +127,7 @@ try {
       animations: 'disabled', fullPage: false, scale: 'css' });
     ids.push(step.stepId);
   }
+  await auth.check(null);
   console.log(JSON.stringify({ stepIds: ids, guides }));
 } finally {
   await browser.close();

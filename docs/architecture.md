@@ -23,7 +23,7 @@ Dependency direction: CLI orchestrates adapters and Core; adapters depend on Cor
 
 ## ADO journey trust boundary
 
-`journey-draft --plan-id` exports the ADO plan and trace read-only, validates project/plan identity and uses **explicit Tested By links** without inferring missing relationships. The batch reuses one bounded UI snapshot and local-model connection; every response is validated and saved externally as a review-required draft. The separate `journey` command captures only approved, repository-relative declarative steps against disposable local UI data. DocWizz imports validated evidence. See [ADO journeys](ado-journeys.md).
+`journey-draft --plan-id` exports the ADO plan and trace read-only, validates project/plan identity and uses **explicit Tested By links** without inferring missing relationships. The batch reuses one bounded UI snapshot and local-model connection; every response is validated and saved externally as a review-required draft. For protected routes, the browser reads a repository-confined DocWizz Playwright state file (cookies, localStorage and sessionStorage), without ever sending the state to the AI or writing it into proposals. It fails closed on login redirects and rejected APIs; the read-only snapshot still blocks cross-origin requests. The separate `journey` command captures only approved, repository-relative declarative steps against disposable local UI data. DocWizz imports validated evidence. See [ADO journeys](ado-journeys.md).
 
 ## Future Vue integration
 
