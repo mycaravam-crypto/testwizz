@@ -2,7 +2,7 @@
 
 Generate reviewable **C#/xUnit test proposals** with a local AI model (Ollama or an OpenAI-compatible server). TestWizz also offers **Vue 3 context and scenario planning** and **review-first Playwright UI proposals**. Model endpoints are limited to private networks; use sanitized source and UI data, as these are supplied to the configured model.
 
-Status: active development. C#/xUnit generation and isolated .NET execution, Vue context/planning, UI proposals and reviewed journey evidence are implemented. **AI-generated Vue/Vitest tests and Vue/UI execution by `testwizz run` are not implemented.** Real-model UI acceptance and sensitive-snapshot validation remain open ([#61](https://github.com/mycaravam-crypto/testwizz/issues/61), [#11](https://github.com/mycaravam-crypto/testwizz/issues/11)). See [PLAN.md](PLAN.md) for scope and milestones.
+Status: active development. C#/xUnit generation and isolated .NET execution, Vue context/planning, review-first UI proposals, **ADO plan-wide journey drafts**, and reviewed journey evidence are implemented. **Vue/Vitest generation and Vue/UI execution by `testwizz run` are not implemented.** See [Getting started](docs/getting-started.md), [ADO journeys](docs/ado-journeys.md), and the [implementation plan](PLAN.md).
 
 ## Commands (implemented so far)
 
@@ -21,91 +21,24 @@ Status: active development. C#/xUnit generation and isolated .NET execution, Vue
 | `testwizz run [path] --proposal <id> [--no-repair] [--image <image>] [--timeout <s>]` | Build and run **.NET/xUnit proposals only** in Docker/Podman. Restore can access package feeds; build/test are network-disabled. Bounded AI repair updates the proposal bundle, not the repository. Vue/UI proposals are unsupported. |
 | `testwizz apply [path] --proposal <id> [--allow-unverified]` | Copy a proposal's new test files into the repository after stale and overwrite checks. Nothing is committed. |
 
-### UI acceptance criteria from Azure DevOps Server
+## Azure DevOps journeys and documentation
 
-The existing `--criteria <file.md>` option remains supported. To use the explicit acceptance criteria of an ADO work item directly, install and authenticate the [ado-devops CLI](https://github.com/mycaravam-crypto/ado-devops) first:
+Start from an entire ADO test plan instead of entering individual work-item IDs. TestWizz reads **explicit Tested By links**, proposes browser steps with your **local model**, and saves review-required drafts:
 
 ```bash
+# Run in the target application's repository with a trusted local app running.
 ado auth status
-ado workitem context 4711
-testwizz ui . --url http://127.0.0.1:5173/checkout --ado-workitem 4711
-```
-
-TestWizz calls `ado workitem context <id>` (read-only, schema `ado.requirement-context/v1`) in the target repository, so the ADO CLI can derive its server/project from the Git remote. It reads only `acceptanceCriteria.items[].text`, not descriptions or linked work items, and requires **1 to 5** explicit criteria. Use `ado workitem context <id> --criteria-field <ref>` to inspect a custom field; the TestWizz adapter currently uses the ADO CLI's default acceptance-criteria field. The two criterion-source options are mutually exclusive.
-
-Each proposal records the ADO work-item ID, server, project, field, current revision and a criteria SHA-256. `testwizz apply` checks the live work item again, refusing when it changed or cannot be verified; `--allow-unverified` does not bypass this check. The criteria snapshot is embedded in the proposal bundle **outside** the repository. Treat proposal output as sensitive when ADO work items contain confidential requirements.
-
-`testwizz ui` only generates review-first Playwright proposals. The current `testwizz run` command does **not** run UI proposals; it currently supports .NET proposals only.
-
-
-### Draft a journey directly from ADO with local AI
-
-Instead of writing every reviewed locator from scratch, TestWizz can **propose** a `testwizz.journey/v1` file using an exported ADO test case and a read-only accessible Playwright snapshot of the running local route:
-
-```bash
-ado testplan export 12 --output ../ado-plan.json
-testwizz journey-draft . --url http://127.0.0.1:5173/orders \
-  --workitem 4711 --plan ../ado-plan.json --case 512 \
-  --out ../journey-drafts
-```
-
-The output contains `journey.json` and `review.md` **outside the repository**. TestWizz validates that model-proposed `click`/`fill` actions, selectors and visibility assertions match every explicit ADO step ID and order. Uncertain selectors and other assumptions remain human review items. **No browser actions or test execution occur in this command**; only read-only GET/HEAD observations are permitted. Inspect both files, replace all example values with safe synthetic data, then copy the reviewed JSON to the repository and run `testwizz journey` as documented below. Missing or unsupported ADO case steps fail closed. This is a one-case incremental helper, not automatic end-to-end test planning or proof of acceptance.
-### Draft all explicitly linked test cases from a plan
-
-TestWizz can export a full ADO plan and its explicit Tested By trace, deduplicate test cases across suites, and draft one journey for each linked work-item/test-case pair. You do not have to supply individual work-item or case IDs:
-
-```bash
-# One-time setup in Git Bash: a trusted running local route (not inferred from ADO).
+testwizz ai check .
 export TESTWIZZ_JOURNEY_URL=http://127.0.0.1:5173/orders
-
-# Inspect the links first; no browser or AI model is contacted.
-testwizz journey-draft . --plan-id 12 --list-only --format json
-
-# Generate the review-required journeys.
-testwizz journey-draft . --plan-id 12 --format json
+testwizz journey-draft . --plan-id 12 --list-only   # inspect links without AI/browser
+testwizz journey-draft . --plan-id 12               # draft linked cases
 ```
 
-You may supply `--url http://127.0.0.1:5173/orders` instead of the environment variable and, if required, `--area 'Shop\Orders'` to restrict the ADO trace export. Without `--area`, the plan's project root is used. ADO does not provide a guaranteed application URL for each test case; **every draft uses this explicitly configured starting route**, so per-case routing and selectors still need review.
+A shared loopback start URL is required (environment variable or `--url`); ADO does not reliably provide a route per case. Unlinked cases are skipped, multiple explicit links remain separate, and unsupported steps are reported. **Drafts are never executed or applied automatically.** Follow [ADO journeys](docs/ado-journeys.md) to review, capture screenshot evidence, and publish a DocWizz manual.
 
-The command uses `ado testplan export <id>` and `ado testplan trace-export <id> --area <path>` (both read-only), keeping the exports and a JSON batch report outside the source repository. Missing links are explicitly skipped, ambiguous multiple links are retained as separate drafts, and invalid or unsupported test cases are reported without silently inventing a relationship. Generated `journey.json` and `review.md` files require individual review and manual approval before any `testwizz journey` execution. Authenticated UI flows and per-case route discovery are not automated. For very large plans the sequential AI calls may take time; the route snapshot and local model connection are reused across the batch.
+For a single work item, `testwizz ui . --url http://127.0.0.1:5173/orders --ado-workitem 4711` creates review-first Playwright proposals; `testwizz run` cannot execute UI proposals. The original single-case `journey-draft` form remains supported (see `testwizz help journey-draft`).
 
-### Screenshot evidence from reviewed ADO test-case steps
-
-First use `testwizz ui --ado-workitem <id>` to propose Playwright tests with the configured local AI. Review the intended interactions. Then export the linked ADO test plan and record the reviewed interactions in a small declarative `journey.json` (not generated JavaScript).
-
-```bash
-ado testplan export 12 --output ../ado-plan.json
-testwizz journey . --url http://127.0.0.1:5173/orders \
-  --workitem 4711 --plan ../ado-plan.json --case 512 \
-  --steps journey.json --out ../journey-evidence
-```
-
-Example `journey.json`, with ADO test-step IDs and fixture data:
-
-```json
-{
-  "schema": "testwizz.journey/v1",
-  "steps": [
-    { "stepId": 2, "action": "click", "role": "button", "name": "New",
-      "expectRole": "heading", "expectName": "Create order" },
-    { "stepId": 3, "action": "fill", "label": "Customer", "value": "Fixture Customer",
-      "expectText": "Fixture Customer" }
-  ]
-}
-```
-
-The command reads current acceptance criteria through `ado workitem context`, matches *every* reviewed step ID and order against the exported `ado-testplan/1` test case, and captures a screenshot after each Playwright visibility assertion. It runs a fixed, bounded Playwright interpreter: **no AI-generated JavaScript is executed**. Output is an external `testwizz.ui-evidence/v1` manifest and PNG images. The chosen work-item/test-case pair is deliberately marked `selected-not-verified`: selecting them together does not prove an explicit ADO `Tested By` relationship or acceptance fulfillment.
-
-**Numbered screenshot callouts:** before each action, TestWizz captures an annotated screenshot with a numbered bubble for every uniquely resolved, visible action locator from the reviewed journey, including earlier steps when still visible (maximum six). A form can show bubbles 1, 2 and 3 together; hidden or ambiguous controls are omitted until they become uniquely visible. Numbers follow user-guide instruction order, not ADO test-step IDs. The unmodified screenshot is still captured after the assertion and retained as separate test evidence.
-
-The same `testwizz.ui-evidence/v1` schema now optionally carries `guideScreenshot`, `guideSha256`, and `callouts[]` (number, ADO step ID, target and viewport coordinates). Consumers validate both hashes. Bounding boxes come directly from Playwright; no separate vision model is required.
-This first increment supports click/fill, simple visible assertions, a running HTTP loopback application, 1–6 test steps, and synthetic data. It does not automate login, execute full AI-generated Playwright specs, or verify ADO requirement-to-test-case links. Actions can mutate local application data; **use a disposable test environment**. No cross-origin browser requests are allowed. Keep plan exports, browser output and credentials outside public repositories; review screenshots for personal data before sharing.
-
-Use `docwizz generate . --html --journeys ../journey-evidence` to publish a **review-first** step-by-step user-guide draft from the validated evidence.
-Global options: `--format text|json`, `--help`, `--version`.
-
-With `--format json`, stdout contains exactly one JSON object (`"schema": "testwizz.output/v1"`); human-readable diagnostics go to stderr.
-Exit codes: `0` success, `1` validation failed, `2` usage, configuration or runtime error.
+**Data boundary:** ADO criteria, case steps and UI accessibility text are sent to the configured private model endpoint. Use sanitized data and trusted test applications.
 
 ## Applying verified proposals in a batch
 
@@ -235,26 +168,6 @@ output: ../.testwizz-proposals
 
 Previously generated `testwizz.json` files remain valid without conversion. If both files exist, `testwizz.yaml` takes precedence. New repositories should use the common `<tool>.yaml` naming pattern alongside `gitwizz.yaml` and `docwizz.yaml`.
 
-<!-- Legacy JSON example retained for reference -->
-```json
-{
-  "version": 1,
-  "ai": {
-    "provider": "ollama",
-    "endpoint": "http://127.0.0.1:11434",
-    "model": "qwen2.5-coder:14b",
-    "apiKeyEnv": null,
-    "timeoutSeconds": 120,
-    "maxContextTokens": 16000
-  },
-  "run": {
-    "runtime": "docker",
-    "maxRepairAttempts": 2
-  },
-  "output": "../.testwizz-proposals"
-}
-```
-
 - `ai.provider`: `ollama` or `openai-compatible` (LM Studio, llama.cpp server, vLLM, ...).
 - `ai.endpoint`: for Ollama the server root (`http://127.0.0.1:11434`); for OpenAI-compatible servers the base URL including the version, e.g. `http://127.0.0.1:1234/v1`.
 - `ai.apiKeyEnv`: the *name* of an environment variable holding the key, never the key itself. `.env` files are not loaded.
@@ -315,7 +228,7 @@ testwizz generate . --since origin/main --all-changed --min-risk 40 --format jso
 testwizz generate . --since origin/main --for Calculator.Divide --format json
 ```
 
-`--since` uses `git diff <ref>...HEAD --unified=0` to identify methods whose new-side lines changed. With `--list-changed`, the sorted list of method targets is returned as a deterministic CI-friendly JSON object or Markdown table without contacting the AI endpoint. `--min-risk 0..100` filters methods using a deterministic heuristic for branching, throw guards, awaits, calls and changed lines. It is not a measured defect probability or test coverage. With `--all-changed`, TestWizz generates proposals for up to 20 changed C# methods and emits one batch status report (`testwizz.generate-batch/v1`) with each proposal path or error code; any failed target sets exit code 1. One changed method can be selected automatically; when multiple methods changed, use `--for` to choose one. The full multi-target batch/CI summary, Vue changed-code support and framework adapters remain future work under [#12](https://github.com/mycaravam-crypto/testwizz/issues/12). This command still generates proposals outside the repo and does not post PR comments.
+`--since` uses `git diff <ref>...HEAD --unified=0` to identify changed C# methods. `--list-changed` reports targets without calling AI; `--min-risk 0..100` filters by a deterministic heuristic, **not** measured defect probability or coverage. `--all-changed` generates up to 20 proposals and returns a `testwizz.generate-batch/v1` report; any failed target sets exit code 1. When several methods changed, use `--all-changed` or choose one with `--for`. Vue changed-code generation and additional frameworks are not implemented. Proposals remain outside the repository; no PR comments are posted.
 
 ## Generate
 
@@ -333,7 +246,7 @@ testwizz generate . --for Calculator.Divide --out ~/proposals
    - calls to members or constructors of repository types that don't exist, have the wrong arguments or aren't accessible are errors. This includes calls inside `Assert.Throws` lambdas and mock setups or verifications: TestWizz type-checks against small stand-ins for the xUnit, NSubstitute and Moq APIs;
    - test quality: skipped tests (`Skip =`, `Assert.Skip*`), assertions that can never fail (`Assert.True(true)`, `Assert.Equal(4, 4)`, `throw new NotImplementedException()`), tests without assertions and duplicate test names are errors; tests that only check for null are warnings. Mock verifications (`Received`, `Verify`, `MustHaveHappened`), `Should*` chains and local `Assert*`/`Verify*` helpers count as assertions;
    - paths: the proposed file must be a plain relative path inside the repository (no `..`, no symbolic link leading outside) and must not exist yet.
-4. The **proposal bundle** (`testwizz.proposal/v1`) is written to `<output>/<id>/`, where `output` comes from `testwizz.json` (default `../.testwizz-proposals`, next to the repository) or `--out`. An output directory inside the repository, also via a symbolic link, is refused. The bundle contains:
+4. The **proposal bundle** (`testwizz.proposal/v1`) is written to `<output>/<id>/`, where `output` comes from the config (default `../.testwizz-proposals`) or `--out`. An output directory inside the repository, including through a symbolic link, is refused. The bundle contains:
 
    | File | Content |
    |------|---------|
@@ -354,7 +267,7 @@ testwizz run . --proposal shop-calculator-divide-5242ec6f86c4
 testwizz run . --proposal ../.testwizz-proposals/shop-calculator-divide-5242ec6f86c4 --format json
 ```
 
-`run` needs Docker or Podman (`run.runtime` in `testwizz.json`). Without a working runtime it fails with exit code 2; it never falls back to running tests on the host.
+`run` needs Docker or Podman (`run.runtime` in `testwizz.yaml` or legacy JSON). Without a working runtime it fails with exit code 2; it never falls back to running tests on the host.
 
 1. A throw-away copy of the repository is made in the system temp folder (tracked and untracked-but-not-ignored files, without `bin/`, `obj/`, `.git/`, and without symbolic links that point outside the repository). The repository itself is never mounted.
 2. **Restore** (`dotnet restore <test project>`, network on) sees only project and build files: `*.csproj`, `*.props`, `*.targets`, solutions, `global.json`, `nuget.config`, lock files.
@@ -394,20 +307,18 @@ Files are created with create-new semantics; if one fails, the ones already writ
 
 ## Development
 
-Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download).
+Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download). Build and test from source:
 
 ```bash
-dotnet build
-dotnet test
+dotnet restore
+dotnet build -c Release
+dotnet test -c Release
 dotnet run --project src/TestWizz.Cli -- help
-
-# install as a local tool
-dotnet pack src/TestWizz.Cli -c Release -o artifacts
-dotnet tool install --global TestWizz --add-source ./artifacts
-testwizz --version
 ```
 
-Layout: `src/TestWizz.Cli` (commands, output), `src/TestWizz.Core` (configuration, contracts, proposal bundle and stack-neutral checks), `src/TestWizz.AI` (model clients, endpoint guard, `ai check`), `src/TestWizz.DotNet` (Roslyn context provider, C# scenario extractor, xUnit conventions/generator/validator), `fixtures/dotnet` (sample solution used by golden tests; regenerate goldens with `TESTWIZZ_UPDATE_GOLDEN=1 dotnet test`), `tests/TestWizz.UnitTests` (xUnit v3; model servers are faked on loopback, so no real AI or network is needed). Tests that start real containers run only with `TESTWIZZ_DOCKER_TESTS=1` (set in CI); `TESTWIZZ_DOCKER_IMAGE` overrides the SDK image they use.
+For **installation and updates**, including Git-derived `-dev` NuGet packages, see [Getting started](docs/getting-started.md#install-or-update-the-global-tool). Updating the source checkout does not update the globally installed tool.
+
+Source projects live under `src/TestWizz.*`; fixtures and regression tests under `fixtures/` and `tests/`. Real container tests are opt-in locally with `TESTWIZZ_DOCKER_TESTS=1`.
 
 ## Vue SFC context (initial slice)
 

@@ -1,8 +1,75 @@
 # Getting started
 
-Requirements: .NET 10 SDK, Node.js 22 for Vue fixtures, and Docker/Podman for running generated tests.
+Run commands in the **target application's repository** unless a step says to use the TestWizz source checkout. Requirements: .NET 10 SDK and a running **local model** (Ollama or OpenAI-compatible). Docker/Podman is needed **only** to run generated C#/xUnit tests. Browser workflows require a trusted local application and its Playwright dependencies.
 
-```sh
+## Install or update the global tool
+
+In the **TestWizz source checkout** (Git Bash), build a package:
+
+```bash
+git pull --ff-only
+git fetch --tags
+dotnet pack src/TestWizz.Cli -c Release -o ./artifacts
+
+# Extract the latest package version, including the -dev suffix.
+package=$(ls -t artifacts/TestWizz.*.nupkg | head -n 1)
+version=$(basename "$package" | sed -e 's/^TestWizz\.//' -e 's/\.nupkg$//')
+echo "TestWizz package: $version"
+```
+
+For an **existing** global installation:
+
+```bash
+dotnet tool update --global TestWizz --version "$version" --add-source ./artifacts
+hash -r
+testwizz --version
+```
+
+For a first installation, use `dotnet tool install --global TestWizz --version "$version" --add-source ./artifacts` instead. The explicit `--version` is required for Git-derived `-dev` packages; NuGet searches stable versions by default. If an artificially higher version blocks the update, uninstall it once, then install the exact version. `git pull` alone never changes the installed tool.
+
+## Configure a target project
+
+In the **application repository**:
+
+```bash
+testwizz init .       # only if neither testwizz.yaml nor testwizz.json exists
+# Adjust testwizz.yaml: ai.endpoint, ai.model and output.
+testwizz config .
+testwizz ai check .
+```
+
+Legacy `testwizz.json` remains supported, but `testwizz.yaml` takes precedence. Do not use `init --force` without backing up existing settings. See [configuration](../README.md#configuration) and [local-model authentication](ai-providers.md).
+
+## Generate and apply C# tests
+
+```bash
+testwizz bootstrap . --all --review
+testwizz apply . --all --verified-only
+git status --short
+dotnet test -c Release
+```
+
+`bootstrap` generates C#/xUnit proposals and tests them in Docker/Podman; `--verified-only` copies only previously passing, unchanged proposals. Review added files before committing. Without a container, `bootstrap . --all --generate-only` makes **unverified** proposals instead. Use `bootstrap . --all --resume` to continue a scan with unchanged sources, configuration and scan mode. Proposals and checkpoints remain outside the repository. See [bootstrap](../README.md#initial-repository-baseline-experimental).
+
+If `docwizz.yaml` defines `scope.projects.include`, bootstrap limits C# loading to the listed .NET projects; invalid scopes are rejected.
+
+## Draft an ADO test plan
+
+With `ado auth status` succeeding and the application running locally:
+
+```bash
+export TESTWIZZ_JOURNEY_URL=http://127.0.0.1:5173/orders
+testwizz journey-draft . --plan-id 12 --list-only
+testwizz journey-draft . --plan-id 12
+```
+
+Only explicit ADO Tested By links are used. Unlinked cases are skipped, drafts are not automatically executed, and all cases use the configured starting URL. Continue with [ADO journeys: review → capture → DocWizz](ado-journeys.md).
+
+## Develop TestWizz itself
+
+In the **TestWizz source checkout**:
+
+```bash
 dotnet restore
 npm install --prefix fixtures/vue
 dotnet build -c Release
@@ -10,81 +77,4 @@ dotnet test -c Release
 dotnet run --project src/TestWizz.Cli -- help
 ```
 
-To use a local model:
-
-```sh
-ollama pull qwen2.5-coder:14b
-dotnet run --project src/TestWizz.Cli -- init .
-dotnet run --project src/TestWizz.Cli -- ai check .
-```
-
-Adjust `testwizz.json` before `ai check` if your model differs. For detailed usage see [the README](../README.md).
-
-## Full-repository C# scan and resume
-
-Run an adaptive concurrent generation scan (with shared Roslyn compilation and LLM client) of eligible C# methods from your target repository (public, internal, protected-internal methods with bodies; excludes tests and ignored files):
-
-```bash
-tw bootstrap . --all --review              # generate proposals and run in containers
-tw bootstrap . --all --generate-only      # generate without containers
-tw bootstrap . --all --generate-only --debug --max-workers 4 # adaptive generation; show test source
-tw bootstrap . --all --resume             # continue an interrupted review run
-tw bootstrap . --all --generate-only --progress-jsonl --format json # structured progress on stderr
-```
-
-The progress display starts before the first LLM request and uses a 24-character bar, percentage, completed/total methods, current phase/target, and elapsed time to match the GitWizz/DocWizz CLI style. While model requests run, a heartbeat is emitted to stderr every 15 seconds. The completed percentage advances when a generated test proposal finishes; a slow first model request can therefore leave the percentage at 0% despite active processing. Interactive terminals redraw the line; redirected output and CI emit one plain line per completed target. The percentage reports completed targets, not tokens generated by the model, so it can remain unchanged during a slow AI call. TestWizz writes `bootstrap-checkpoint.json` **outside the repository**, alongside the proposal folders, after each completed target. Resume skips successful targets with existing proposal manifests and reruns failed/incomplete targets. Resume requires the same source files, effective config, and scan mode (including `--generate-only`). An interrupted AI request is not recoverable mid-token; that target is retried. Starting without `--resume` resets the checkpoint for a new scan, not the existing proposal bundles. Do not run two bootstrap processes using the same output directory concurrently.
-
-For changed methods, use `testwizz generate . --since main --all-changed --max-workers 4 --debug`. Adaptive concurrency starts at one worker, increases up to the given limit (1–8), and backs off if per-wave throughput drops substantially. The algorithm measures complete targets/second, not LLM tokens/second; batch sizes and target complexity influence its decisions. Concurrent workers share a read-only Roslyn compilation and LLM HTTP client. `--debug` sends generated C# code to stderr, keeping JSON stdout valid; do not expose confidential source in CI logs. The bootstrap generation runs in adaptive parallel waves; container test execution remains sequential.\n\nThis is method-based proposal generation, not a full branch-coverage measurement or Vue test generation.
-
-## Update the globally installed .NET tool after pulling
-
-`git pull` updates the source checkout, **not** the globally installed `testwizz` tool. From the TestWizz repository root:
-
-```bash
-git pull
-dotnet pack src/TestWizz.Cli -c Release -o artifacts
-dotnet tool update --global TestWizz --add-source ./artifacts
-tw --version
-```
-
-If you have not created the Bash alias, run `testwizz --version` instead. Global .NET tools normally live under `$HOME/.dotnet/tools` on Linux/macOS. Set `alias tw='testwizz'` in `~/.bashrc` if desired.
-
-The CLI package version is derived from Git (the pack step validates this in CI): at a `vX.Y.Z` tag it is `X.Y.Z`; after that tag it is the **next patch** prerelease (for example `0.2.4-dev.3` three commits after `v0.2.3`). Without a matching tag it uses `0.1.1-dev.<commit-count>`. You need Git history locally (avoid shallow clones). An explicit version can be supplied with `dotnet pack ... -p:Version=1.2.3` for a controlled release.
-
-**If you previously installed an artificial version such as `0.99.0-local.1`, that version is higher than the normal project version. Uninstall that one-time override before switching back to Git-derived packages:**
-
-```bash
-dotnet tool uninstall --global TestWizz
-dotnet tool install --global TestWizz --add-source ./artifacts
-```
-
-Release policy matches DocWizz and GitWizz: merged PRs create SemVer releases using `release:major`, `release:minor`, `release:patch` (default), or `release:none`. A release workflow verifies tests, creates an immutable `vX.Y.Z` tag and attaches the .NET tool package to a GitHub Release.
-
-If the installed package has the same or a higher version, `dotnet tool update` may not replace it. To force a local reinstall:
-
-```bash
-dotnet tool uninstall --global TestWizz
-dotnet tool install --global TestWizz --add-source ./artifacts
-```
-
-Use this only when you intend to replace your installed version. The Git-derived version applies when packing from the repository; `git pull` alone never installs the new binary.
-
-### Respect DocWizz project scope
-
-When `docwizz.yaml` exists in the target repository and contains `scope.projects.include`, `tw bootstrap . --all` **loads and analyzes only the C# sources owned by those listed .NET projects**, instead of parsing the whole repository before filtering. Nested project directories use the nearest `.csproj` as owner. This reduces Roslyn startup and discovery work in large repositories. Paths must name existing `.csproj` manifests relative to the scan root (case-sensitive, using `/`), for example:
-
-```yaml
-scope:
-  projects:
-    include:
-      - src/Shop/Shop.csproj
-      - src/Billing/Billing.csproj
-```
-
-Without `docwizz.yaml` or without a `scope` block, TestWizz retains its normal repository-wide method discovery. An invalid or empty configured project list fails rather than silently scanning everything. Other valid project manifests (such as `package.json`, `.fsproj`, and `.vbproj`) can appear in the include array but do not produce C# targets in the current bootstrap command. The project scope is part of the resume fingerprint: changing the project selection requires starting a fresh scan without `--resume`.
-
-This is a **project selection filter**. DocWizz's additional `references`, `test_links`, and `unassigned_sources` policies are not interpreted by TestWizz.
-
-## Configuration filenames across Wizz tools
-
-Use `gitwizz.yaml`, `docwizz.yaml`, and `testwizz.yaml` as the common naming pattern. TestWizz now writes `testwizz.yaml` when you run `testwizz init .`; existing `testwizz.json` files still load unchanged. If both TestWizz filenames exist, `testwizz.yaml` wins. You can migrate by running `testwizz init . --force` only after saving your previous settings, then copying your model and output configuration into the YAML file. Do not delete your JSON configuration until `testwizz config .` succeeds.
+Node.js 22 is required for the Vue fixtures. For the complete feature boundaries see the [README](../README.md) and [PLAN](../PLAN.md).
