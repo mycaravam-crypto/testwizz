@@ -17,7 +17,7 @@ Status: active development. C#/xUnit generation and isolated .NET execution, Vue
 | `testwizz generate [path] --for <method> [--out <dir>] [--ai-plan]` or `testwizz generate [path] --since <ref> [--list-changed] [--for <method>]` | Plan, let the local model write xUnit tests, validate them and save a proposal bundle outside the repository. The repository is not changed. |
 | `testwizz ui [path] --url <loopback-url> (--criteria <file.md> \| --ado-workitem <id>)` | Generate review-first Playwright UI proposals from a local route and explicit Markdown or Azure DevOps work-item acceptance criteria; does not execute tests. |
 | `testwizz journey [path] --url <loopback-url> --workitem <id> --plan <ado-plan.json> --case <id> --steps <reviewed.json>` | Capture step screenshots and assertion evidence from a reviewed ADO test case; does not execute AI-generated code. |
-| `testwizz journey-draft [path] --url <loopback-url> --workitem <id> --plan <ado-plan.json> --case <id>` | Have the configured local AI propose reviewed declarative browser steps from the ADO case and accessible UI snapshot; never executes tests. |
+| `testwizz journey-draft [path] --plan-id <id> [--url <loopback-url>] [--area <path>] [--list-only]` or `--workitem <id> --plan <ado-plan.json> --case <id> --url <loopback-url>` | Automatically discovers explicit ADO Tested By links per plan and generates review-required AI journey drafts, or handles a single case. Nothing is executed. |
 | `testwizz run [path] --proposal <id> [--no-repair] [--image <image>] [--timeout <s>]` | Build and run **.NET/xUnit proposals only** in Docker/Podman. Restore can access package feeds; build/test are network-disabled. Bounded AI repair updates the proposal bundle, not the repository. Vue/UI proposals are unsupported. |
 | `testwizz apply [path] --proposal <id> [--allow-unverified]` | Copy a proposal's new test files into the repository after stale and overwrite checks. Nothing is committed. |
 
@@ -50,6 +50,25 @@ testwizz journey-draft . --url http://127.0.0.1:5173/orders \
 ```
 
 The output contains `journey.json` and `review.md` **outside the repository**. TestWizz validates that model-proposed `click`/`fill` actions, selectors and visibility assertions match every explicit ADO step ID and order. Uncertain selectors and other assumptions remain human review items. **No browser actions or test execution occur in this command**; only read-only GET/HEAD observations are permitted. Inspect both files, replace all example values with safe synthetic data, then copy the reviewed JSON to the repository and run `testwizz journey` as documented below. Missing or unsupported ADO case steps fail closed. This is a one-case incremental helper, not automatic end-to-end test planning or proof of acceptance.
+### Draft all explicitly linked test cases from a plan
+
+TestWizz can export a full ADO plan and its explicit Tested By trace, deduplicate test cases across suites, and draft one journey for each linked work-item/test-case pair. You do not have to supply individual work-item or case IDs:
+
+```bash
+# One-time setup in Git Bash: a trusted running local route (not inferred from ADO).
+export TESTWIZZ_JOURNEY_URL=http://127.0.0.1:5173/orders
+
+# Inspect the links first; no browser or AI model is contacted.
+testwizz journey-draft . --plan-id 12 --list-only --format json
+
+# Generate the review-required journeys.
+testwizz journey-draft . --plan-id 12 --format json
+```
+
+You may supply `--url http://127.0.0.1:5173/orders` instead of the environment variable and, if required, `--area 'Shop\Orders'` to restrict the ADO trace export. Without `--area`, the plan's project root is used. ADO does not provide a guaranteed application URL for each test case; **every draft uses this explicitly configured starting route**, so per-case routing and selectors still need review.
+
+The command uses `ado testplan export <id>` and `ado testplan trace-export <id> --area <path>` (both read-only), keeping the exports and a JSON batch report outside the source repository. Missing links are explicitly skipped, ambiguous multiple links are retained as separate drafts, and invalid or unsupported test cases are reported without silently inventing a relationship. Generated `journey.json` and `review.md` files require individual review and manual approval before any `testwizz journey` execution. Authenticated UI flows and per-case route discovery are not automated. For very large plans the sequential AI calls may take time; the route snapshot and local model connection are reused across the batch.
+
 ### Screenshot evidence from reviewed ADO test-case steps
 
 First use `testwizz ui --ado-workitem <id>` to propose Playwright tests with the configured local AI. Review the intended interactions. Then export the linked ADO test plan and record the reviewed interactions in a small declarative `journey.json` (not generated JavaScript).

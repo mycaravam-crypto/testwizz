@@ -71,12 +71,15 @@ public static class JourneyDraftCommand
     public static CommandDefinition Definition { get; } = new(
         "journey-draft",
         "Draft reviewed Playwright journey selectors from ADO test steps and a read-only local UI snapshot; never executes tests.",
-        "testwizz journey-draft [path] --url <loopback-url> --workitem <id> --plan <ado-plan.json> --case <id> [--out <dir>]",
+        "testwizz journey-draft [path] (--plan-id <id> [--area <area>] [--list-only] | --workitem <id> --plan <ado-plan.json> --case <id>) [--url <loopback-url>] [--out <dir>]",
         [
             new("--url", "Running HTTP loopback application URL.", "url"),
             new("--workitem", "ADO work item ID.", "id"),
             new("--plan", "JSON exported by ado testplan export.", "json"),
             new("--case", "ADO test-case ID in the plan.", "id"),
+            new("--plan-id", "Export all cases of an ADO plan and resolve explicit Tested By links.", "id"),
+            new("--area", "ADO Area Path for trace export (defaults to the plan project root).", "path"),
+            new("--list-only", "List plan-to-requirement links without calling AI or opening the browser."),
             new("--out", "Draft output directory outside the repository.", "dir"),
         ], 1, Run);
 
@@ -108,6 +111,14 @@ public static class JourneyDraftCommand
 
     private static int Run(CommandContext context)
     {
+        if (context.Has("--plan-id"))
+        {
+            if (context.Has("--plan") || context.Has("--case") || context.Has("--workitem"))
+                throw new CliException("usage", "--plan-id cannot be combined with --plan, --case, or --workitem.");
+            return JourneyDraftBatch.Run(context);
+        }
+        if (context.Has("--area") || context.Has("--list-only"))
+            throw new CliException("usage", "--area and --list-only require --plan-id.");
         var address = context.Options.GetValueOrDefault("--url");
         if (!Uri.TryCreate(address, UriKind.Absolute, out var url) || url.Scheme != "http" ||
             !url.IsLoopback || url.UserInfo.Length != 0 || url.Port <= 0 ||
@@ -140,7 +151,8 @@ public static class JourneyDraftCommand
         try { ProposalBundle.EnsureOutsideRepository(root, output); }
         catch (ProposalException ex) { throw new CliException(ex.Code, ex.Message); }
 
-        string snapshot = UiCommand.CaptureSnapshot(root, url.ToString(), context.CancellationToken);
+        string snapshot = context.Options.TryGetValue("--batch-snapshot", out var cached) && cached is not null
+            ? cached : UiCommand.CaptureSnapshot(root, url.ToString(), context.CancellationToken);
         var prompt = new StringBuilder()
             .Append("Route: ").Append(url.PathAndQuery)
             .Append("\nADO test-case title: ").Append(PromptData.Neutralize(testCase.Title))
@@ -158,7 +170,8 @@ public static class JourneyDraftCommand
         JsonObject response;
         try
         {
-            using var model = ModelClient.Create(config.Ai, context.GetEnvironmentVariable);
+            using var owned = context.SharedModel is null ? ModelClient.Create(config.Ai, context.GetEnvironmentVariable) : null;
+            var model = context.SharedModel ?? owned!;
             response = model.CompleteJsonAsync(
                 new JsonChatRequest(SystemPrompt, prompt.ToString(), "testwizz_journey_draft", ResponseSchema),
                 context.CancellationToken).GetAwaiter().GetResult().Content;
@@ -192,7 +205,9 @@ public static class JourneyDraftCommand
             $"ADO plan: {testCase.PlanId}, test case: {caseId}, revision {testCase.Revision}\n\n" +
             $"Criteria SHA-256: {ado.Sha256}\n\n" +
             $"Plan SHA-256: {Convert.ToHexStringLower(SHA256.HashData(planBytes))}\n\n" +
-            "The selected work item and test case have not had their ADO Tested By relationship verified.\n\n" +
+            (context.Has("--ado-link-confirmed")
+                ? "An explicit ADO Tested By link was found in the plan trace export; verify it remains current before execution.\n\n"
+                : "The selected work item and test case have not had their ADO Tested By relationship verified.\n\n") +
             $"Route: {url.PathAndQuery}\n\n" +
             "The selectors, assertions, test data and behavior are AI proposals, not verified facts.\n" +
             "Review the source ADO test, run against a disposable local application, then copy journey.json into the repository.\n\n" +
