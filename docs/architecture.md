@@ -21,6 +21,10 @@ Dependency direction: CLI orchestrates adapters and Core; adapters depend on Cor
 
 `bootstrap --all` reuses one Roslyn context provider and local model client across targets, and generates targets in bounded parallel waves. Container execution and checkpoint writes are serialized. `generate --since <ref> --all-changed` executes bounded concurrent tasks against the shared read-only compilation and model HTTP client. It ramps from one worker to `--max-workers` (default 4, maximum 8) based on completed-target throughput, with a regression backoff. This heuristic is not a model-token benchmark and should be profiled on the actual LLM hardware. Debug test-source output is opt-in and written to stderr; model output remains untrusted and review-first.
 
+## ADO journey trust boundary
+
+`journey-draft --plan-id` exports the ADO plan and trace read-only, validates project/plan identity and uses **explicit Tested By links** without inferring missing relationships. The batch reuses one bounded UI snapshot and local-model connection; every response is validated and saved externally as a review-required draft. The separate `journey` command captures only approved, repository-relative declarative steps against disposable local UI data. DocWizz imports validated evidence. See [ADO journeys](ado-journeys.md).
+
 ## Future Vue integration
 
 Move the Vue context and scenario providers behind the `TestWizz.Vue` boundary while retaining CLI compatibility and existing golden fixture behavior. AI-powered Vue/Vitest generation is not implemented yet.

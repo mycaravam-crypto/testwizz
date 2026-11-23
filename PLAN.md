@@ -15,7 +15,7 @@ pick target ─► gather context ─► plan scenarios ─► generate tests �
 1. Generate useful happy-path, boundary, negative and exception tests for a selected C# method/class or Vue component/composable/store.
 2. Follow the target project's existing conventions (framework, mocking library, naming, folder layout).
 3. Work well with **small local models**: tight per-target context, structured JSON output, deterministic pre-/post-processing.
-4. Never touch the working tree until the user runs `apply`; never run code outside an isolated container.
+4. Never write proposed tests into the working tree until explicit `apply`; execute generated .NET tests only in isolated containers and reviewed browser journeys only on disposable local fixtures.
 5. Be honest: inferred expectations are flagged for review; a green test is not proof of correctness.
 
 ### Non-goals (MVP)
@@ -65,56 +65,23 @@ Start with the fewest projects that work; split only when a second consumer appe
 
 **`testwizz.proposal/v1`** — proposal id, context/plan hashes, model + prompt-template version, generated files (path, content, linked scenario ids), findings (validation warnings/errors), optional run results.
 
-## 5. CLI
+## 5. Capability boundaries
 
-Implemented commands (see [README.md](README.md) for full options):
+| Workflow | Implemented | Boundary |
+| --- | --- | --- |
+| C#/xUnit | Context, scenarios, proposal generation, isolated run/repair, explicit apply, changed-method and bootstrap batches | No automatic source edits or coverage guarantee |
+| Vue 3 | SFC/composable/store context and scenario planning | No Vitest generation or runner |
+| UI criteria | Review-first Playwright proposals from Markdown or an ADO work item | `testwizz run` supports .NET only |
+| ADO journeys | `journey-draft --plan-id` resolves explicit Tested By links and drafts each linked case; `journey` captures approved evidence | Requires a configured local route; no automatic approval, login or per-case route discovery |
 
-```bash
-testwizz init [path]                                    # create testwizz.yaml (legacy JSON supported)
-testwizz ai check [path]                                # check private local model
-testwizz context <path> --for <target>                  # C# or Vue target
-testwizz plan <path> --for <target> [--ai]              # C# or Vue scenarios
-testwizz generate <path> --for <csharp-method>          # xUnit proposal only
-testwizz generate <path> --since <ref> --list-changed   # C# changed-method report
-testwizz generate <path> --since <ref> --all-changed    # bounded C# batch
-testwizz bootstrap <path> --all [--resume]              # C# baseline
-testwizz run <path> --proposal <id>                     # .NET/xUnit only
-testwizz apply <path> --proposal <id>                   # guarded explicit apply
-testwizz ui <path> --url <loopback-url> --criteria <file.md>
-testwizz journey-draft <path> --url <loopback-url> --workitem <id> --plan <file> --case <id>
-testwizz journey <path> --url <loopback-url> --workitem <id> --plan <file> --case <id> --steps <file>
-```
+For commands use [README](README.md), for setup [Getting started](docs/getting-started.md), and for the ADO → TestWizz → DocWizz workflow [ADO journeys](docs/ado-journeys.md).
 
-`ui` accepts `--ado-workitem <id>` instead of `--criteria`. `apply --all` requires an explicit verification mode. Bootstrap and `--since` target C# only; `run` rejects Vue/UI bundles. `--format json` writes one versioned object to stdout and diagnostics to stderr. Exit codes: 0 success, 1 validation/test failure, 2 configuration/runtime error.
+## 6. Quality and review gates
 
-`testwizz init` now creates `testwizz.yaml`; legacy `testwizz.json` remains supported. Example:
-
-```yaml
-version: 1
-ai:
-  provider: ollama
-  endpoint: http://127.0.0.1:11434
-  model: qwen2.5-coder:14b
-  apiKeyEnv: null
-  timeoutSeconds: 120
-  maxContextTokens: 16000
-run:
-  runtime: docker
-  maxRepairAttempts: 2
-output: ../.testwizz-proposals
-```
-
-## 6. Workflow
-
-1. **Context (C# and Vue):** Resolve target evidence with bounded excerpts. Missing data remains unavailable; related tests do not prove coverage.
-2. **Conventions (C#/xUnit):** Detect test project, xUnit version, naming and mocking style. Vue/Vitest convention detection and generation remain planned.
-3. **Plan (C# and Vue):** Extract deterministic scenarios and optionally enrich with the local model; maintain evidence references and `needsReview`.
-4. **Generate (C#/xUnit):** Produce structured, statically checked proposal bundles outside the working tree. Separately, `ui` produces review-first Playwright proposals from explicit acceptance criteria and a local UI snapshot.
-5. **Validate:** Enforce schema, evidence, path and stale-source checks. Report unsupported or ambiguous details instead of claiming success.
-6. **Run and repair (.NET/xUnit only):** Restore packages in a constrained container, build/test without network access, and bound AI repair attempts. `run` does not execute Vue/Vitest or Playwright proposals.
-7. **Review and apply:** Inspect bundles before guarded `apply`. Reviewed `journey` steps use a fixed browser interpreter for evidence; AI-generated JavaScript is not executed.
-
-`bootstrap --all` performs adaptive bounded parallel C# generation. Container execution and checkpoint writes remain serialized. The focused failure/resume regression remains open ([#27](https://github.com/mycaravam-crypto/testwizz/issues/27)).
+- **Generate:** Treat model output and UI snapshots as untrusted. Preserve ADO IDs and explicit links; never infer missing relationships.
+- **Validate:** Enforce bounded schemas, evidence, source freshness and path safety. Keep `needsReview` and unsupported cases visible.
+- **Execute:** Run generated .NET tests only in constrained containers. Reviewed UI journeys use a fixed interpreter on disposable local fixtures.
+- **Publish:** Guarded `apply` is explicit; review journey assertions and screenshots before collecting evidence or publishing user documentation.
 
 ## 7. Local model guidance
 
@@ -148,7 +115,7 @@ Closing a milestone issue does not imply that every capability in its original r
 | M2 — Vue slice | SFC/composable/store context and Vue planning | No AI-generated Vitest proposals | #3, #6 closed, narrowed |
 | M3 — Run, repair, apply | Isolated .NET/xUnit run and repair; guarded apply | No Vue/Vitest or Playwright runner | #9, #10 closed, narrowed |
 | M4 — Workflow | C# `--since`, CI-oriented output, adaptive batch generation | No NUnit/MSTest/Jest adapters or Vue changed-code generation | #12 closed, narrowed |
-| UI quality | Local UI proposals and reviewed journey evidence | Real local-model acceptance [#61](https://github.com/mycaravam-crypto/testwizz/issues/61) | #61 open |
+| UI and ADO | UI proposals, plan-wide ADO drafts from explicit Tested By links, reviewed evidence | Real-model acceptance [#61](https://github.com/mycaravam-crypto/testwizz/issues/61); per-case route discovery and autonomous execution unsupported | #61 open |
 | Safety and resilience | Endpoint controls, UI network restrictions, bootstrap checkpoints | Snapshot data exposure [#11](https://github.com/mycaravam-crypto/testwizz/issues/11) and failure/resume regression [#27](https://github.com/mycaravam-crypto/testwizz/issues/27) | #11, #27 open |
 
 Extend framework support only when a concrete use case and acceptance criteria justify it.
