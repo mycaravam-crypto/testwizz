@@ -14,9 +14,13 @@ Dependency direction: CLI orchestrates adapters and Core; adapters depend on Cor
 
 1. Keep model output as untrusted proposals. Review and validation are mandatory before application.
 2. Keep framework-specific extraction separate from Core to preserve maintainability under ISO/IEC 25010.
-3. Avoid automatic merges, package publication, or repository modifications from the release workflow.
+3. The SemVer workflow creates a tag and publishes a .NET tool package after a merged PR unless labeled `release:none`. It does not automatically merge PRs or modify application source.
 4. Treat syntactic evidence and related-test discovery as insufficient to claim runtime coverage.
 
-## Batch execution and performance\n\n`bootstrap --all` reuses one Roslyn context provider and local model client across targets, and generates targets in bounded parallel waves. Container execution and checkpoint writes are serialized. `generate --since <ref> --all-changed` executes bounded concurrent tasks against the shared read-only compilation and model HTTP client. It ramps from one worker to `--max-workers` (default 4, maximum 8) based on completed-target throughput, with a regression backoff. This heuristic is not a model-token benchmark and should be profiled on the actual LLM hardware. Debug test-source output is opt-in and written to stderr; model output remains untrusted and review-first.\n\n## Future Vue integration
+## Batch execution and performance
+
+`bootstrap --all` reuses one Roslyn context provider and local model client across targets, and generates targets in bounded parallel waves. Container execution and checkpoint writes are serialized. `generate --since <ref> --all-changed` executes bounded concurrent tasks against the shared read-only compilation and model HTTP client. It ramps from one worker to `--max-workers` (default 4, maximum 8) based on completed-target throughput, with a regression backoff. This heuristic is not a model-token benchmark and should be profiled on the actual LLM hardware. Debug test-source output is opt-in and written to stderr; model output remains untrusted and review-first.
+
+## Future Vue integration
 
 Move the Vue context and scenario providers behind the `TestWizz.Vue` boundary while retaining CLI compatibility and existing golden fixture behavior. AI-powered Vue/Vitest generation is not implemented yet.
