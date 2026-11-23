@@ -176,7 +176,7 @@ public static class JourneyCommand
         try
         {
             helper = UiBrowserHelpers.Create("ui-journey.mjs");
-            var captured = Capture(root, url.ToString(), stepsFull, staging, helper, context.CancellationToken, storageState);
+            var captured = Capture(root, url.ToString(), stepsFull, staging, helper, storageState, context.CancellationToken);
             var browser = captured.GetProperty("stepIds").EnumerateArray().Select(x => x.GetInt32()).ToArray();
             var guideRecords = captured.GetProperty("guides").EnumerateArray().ToArray();
             if (browser.Length != spec.Steps.Count || guideRecords.Length != spec.Steps.Count)
@@ -264,7 +264,7 @@ public static class JourneyCommand
         }
     }
 
-    private static JsonElement Capture(string root, string url, string spec, string output, string helper, CancellationToken token, string? storageState)
+    private static JsonElement Capture(string root, string url, string spec, string output, string helper, string? storageState, CancellationToken token)
     {
         if (!File.Exists(Path.Combine(root, "package.json")))
             throw new CliException("journey.playwright_missing", "Target repository needs package.json and @playwright/test.");
