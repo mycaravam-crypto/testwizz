@@ -1,15 +1,16 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { openContext, monitorAuthentication } from './ui-auth.mjs';
 
 // A trusted, read-only browser probe. The AI never supplies executable code here.
-const [root, address] = process.argv.slice(2);
+const [root, address, storageFile] = process.argv.slice(2);
 const target = new URL(address);
 const require = createRequire(path.join(root, 'package.json'));
 const { chromium } = require('@playwright/test');
 
 const browser = await chromium.launch({ headless: true });
 try {
-  const context = await browser.newContext({ serviceWorkers: 'block' });
+  const context = await openContext(browser, target, { serviceWorkers: 'block' }, storageFile);
   // Browser observation is non-interactive: do not allow background WebSocket traffic.
   await context.routeWebSocket('**/*', socket => socket.close());
   await context.route('**/*', route => {
@@ -19,7 +20,9 @@ try {
   });
 
   const page = await context.newPage();
-  await page.goto(address, { waitUntil: 'domcontentloaded', timeout: 12000 });
+  const auth = monitorAuthentication(page, target, storageFile);
+  const navigation = await page.goto(address, { waitUntil: 'domcontentloaded', timeout: 12000 });
+  await auth.check(navigation, true);
   await page.waitForTimeout(300);
   const snapshot = await page.locator('body').ariaSnapshot({ timeout: 5000 });
   console.log(JSON.stringify({

@@ -30,11 +30,13 @@ Start from an entire ADO test plan instead of entering individual work-item IDs.
 ado auth status
 testwizz ai check .
 export TESTWIZZ_JOURNEY_URL=http://127.0.0.1:5173/orders
+# If the application requires JWT: reuse the DocWizz Playwright login state.
+export TESTWIZZ_STORAGE_STATE=.auth/docwizz-state.json
 testwizz journey-draft . --plan-id 12 --list-only   # inspect links without AI/browser
 testwizz journey-draft . --plan-id 12               # draft linked cases
 ```
 
-A shared loopback start URL is required (environment variable or `--url`); ADO does not reliably provide a route per case. Unlinked cases are skipped, multiple explicit links remain separate, and unsupported steps are reported. **Drafts are never executed or applied automatically.** Follow [ADO journeys](docs/ado-journeys.md) to review, capture screenshot evidence, and publish a DocWizz manual.
+A shared loopback start URL is required (environment variable or `--url`); ADO does not reliably provide a route per case. For protected pages, `--storage-state .auth/docwizz-state.json` (or `TESTWIZZ_STORAGE_STATE`) reuses the same Playwright cookies, localStorage and extended sessionStorage as DocWizz screenshots; the JWT stays out of the model prompt. Unlinked cases are skipped, multiple explicit links remain separate, and unsupported steps are reported. **Drafts are never executed or applied automatically.** Follow [ADO journeys](docs/ado-journeys.md) to review, capture screenshot evidence, and publish a DocWizz manual.
 
 For a single work item, `testwizz ui . --url http://127.0.0.1:5173/orders --ado-workitem 4711` creates review-first Playwright proposals; `testwizz run` cannot execute UI proposals. The original single-case `journey-draft` form remains supported (see `testwizz help journey-draft`).
 

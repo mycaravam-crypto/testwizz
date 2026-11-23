@@ -114,8 +114,11 @@ public static class JourneyDraftBatch
 
         // Capture the read-only route once and reuse one local-model connection for the batch.
         // The requested route is explicit and never inferred from untrusted ADO text.
+        var storageState = !listOnly
+            ? BrowserStorageState.Resolve(context, root, new Uri(url!)) : null;
         var snapshot = !listOnly && selection.Links.Count > 0
-            ? UiCommand.CaptureSnapshot(root, url!, context.CancellationToken) : null;
+            ? BrowserStorageState.RedactSnapshot(
+                UiCommand.CaptureSnapshot(root, url!, context.CancellationToken, storageState)) : null;
         using var model = !listOnly && selection.Links.Count > 0
             ? ModelClient.Create(config.Ai, context.GetEnvironmentVariable) : null;
 

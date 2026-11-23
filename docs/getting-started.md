@@ -59,11 +59,12 @@ With `ado auth status` succeeding and the application running locally:
 
 ```bash
 export TESTWIZZ_JOURNEY_URL=http://127.0.0.1:5173/orders
+export TESTWIZZ_STORAGE_STATE=.auth/docwizz-state.json  # if login is required
 testwizz journey-draft . --plan-id 12 --list-only
 testwizz journey-draft . --plan-id 12
 ```
 
-Only explicit ADO Tested By links are used. Unlinked cases are skipped, drafts are not automatically executed, and all cases use the configured starting URL. Continue with [ADO journeys: review → capture → DocWizz](ado-journeys.md).
+Only explicit ADO Tested By links are used. Unlinked cases are skipped, drafts are not automatically executed, and all cases use the configured starting URL. To reuse a DocWizz login, copy its existing Playwright state into `.auth/` in the application repository, add `.auth/` to `.gitignore`, and use the **exact same origin** (hostname and port) as the login recording. Continue with [ADO journeys: review → capture → DocWizz](ado-journeys.md).
 
 ## Develop TestWizz itself
 

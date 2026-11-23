@@ -58,13 +58,14 @@ public static class UiCommand
     public static CommandDefinition Definition { get; } = new(
         "ui",
         "Generate reviewable Playwright UI tests from local route and Markdown or ADO work-item acceptance criteria. Never executes generated tests.",
-        "testwizz ui [path] --url <local-url> (--criteria <markdown> | --ado-workitem <id>) [--snapshot <json>] [--out <dir>]",
+        "testwizz ui [path] --url <local-url> (--criteria <markdown> | --ado-workitem <id>) [--snapshot <json>] [--storage-state <file>] [--out <dir>]",
         Options:
         [
             new("--url", "Running local application URL (loopback HTTP only).", "url"),
             new("--criteria", "Repository-relative Markdown with acceptance criteria.", "file"),
             new("--ado-workitem", "Read explicit acceptance criteria via ado workitem context <id>.", "id"),
             new("--snapshot", "Optional recorded Playwright snapshot JSON, for offline/repeatable generation.", "json"),
+            new("--storage-state", "DocWizz-compatible Playwright login state, relative to the application repository.", "file"),
             new("--out", "Proposal directory outside the repository.", "dir"),
         ],
         MaxArguments: 1,
@@ -127,9 +128,14 @@ public static class UiCommand
             : Path.GetFullPath(config.Output, root);
         ProposalBundle.EnsureOutsideRepository(root, output);
 
-        var snapshot = context.Options.GetValueOrDefault("--snapshot") is { } file
+        var recorded = context.Options.GetValueOrDefault("--snapshot");
+        if (recorded is not null && (context.Has("--storage-state") ||
+            context.GetEnvironmentVariable("TESTWIZZ_STORAGE_STATE") is not null))
+            throw new CliException("usage", "Offline --snapshot cannot be combined with --storage-state.");
+        var storageState = recorded is null ? BrowserStorageState.Resolve(context, root, url) : null;
+        var snapshot = BrowserStorageState.RedactSnapshot(recorded is { } file
             ? ReadSnapshot(root, file)
-            : CaptureSnapshot(root, url.ToString(), context.CancellationToken);
+            : CaptureSnapshot(root, url.ToString(), context.CancellationToken, storageState));
         using var model = ModelClient.Create(config.Ai, context.GetEnvironmentVariable);
         var request = new JsonChatRequest(SystemPrompt,
             $"Route: {url.PathAndQuery}\n\n{PromptData.Begin}\nAcceptance criteria:\n"
@@ -227,16 +233,13 @@ public static class UiCommand
         return snapshot.GetString()![..Math.Min(snapshot.GetString()!.Length, 14000)];
     }
 
-    internal static string CaptureSnapshot(string root, string url, CancellationToken token)
+    internal static string CaptureSnapshot(string root, string url, CancellationToken token, string? storageState = null)
     {
         if (!File.Exists(Path.Combine(root, "package.json")))
             throw new CliException("ui.playwright_missing", "Target repository must have a package.json with @playwright/test installed.");
-        using var stream = typeof(UiCommand).Assembly.GetManifestResourceStream("ui-snapshot.mjs")
-            ?? throw new CliException("ui.helper_missing", "Embedded UI snapshot helper is missing.");
-        var helper = Path.Combine(Path.GetTempPath(), "testwizz-ui-" + Guid.NewGuid().ToString("N") + ".mjs");
+        var helper = UiBrowserHelpers.Create("ui-snapshot.mjs");
         try
         {
-            using (var f = File.Create(helper)) stream.CopyTo(f);
             using var process = new Process
             {
                 StartInfo = new ProcessStartInfo("node")
@@ -250,6 +253,7 @@ public static class UiCommand
             process.StartInfo.ArgumentList.Add(helper);
             process.StartInfo.ArgumentList.Add(root);
             process.StartInfo.ArgumentList.Add(url);
+            if (storageState is not null) process.StartInfo.ArgumentList.Add(storageState);
             process.Start();
             using var limit = CancellationTokenSource.CreateLinkedTokenSource(token);
             limit.CancelAfter(TimeSpan.FromSeconds(25));
@@ -264,7 +268,15 @@ public static class UiCommand
             var stdout = stdoutTask.GetAwaiter().GetResult();
             var stderr = stderrTask.GetAwaiter().GetResult();
             if (process.ExitCode != 0)
-                throw new CliException("ui.snapshot_failed", "Playwright snapshot failed: " + stderr[..Math.Min(stderr.Length, 500)]);
+            {
+                if (stderr.Contains("TESTWIZZ_AUTH_FAILED", StringComparison.Ordinal))
+                    throw new CliException("ui.auth_failed",
+                        "The saved browser session was rejected or expired. Re-record the DocWizz storage state.");
+                // Do not repeat Playwright diagnostics when a credential-bearing file was used.
+                throw new CliException("ui.snapshot_failed", storageState is null
+                    ? "Playwright snapshot failed: " + stderr[..Math.Min(stderr.Length, 500)]
+                    : "Authenticated Playwright snapshot failed. Check the application and stored session.");
+            }
             using var json = JsonDocument.Parse(stdout);
             return json.RootElement.GetProperty("snapshot").GetString() ?? "";
         }
@@ -274,7 +286,7 @@ public static class UiCommand
         }
         finally
         {
-            if (File.Exists(helper)) File.Delete(helper);
+            UiBrowserHelpers.Delete(helper);
         }
     }
 

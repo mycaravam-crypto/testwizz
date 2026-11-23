@@ -71,7 +71,7 @@ public static class JourneyDraftCommand
     public static CommandDefinition Definition { get; } = new(
         "journey-draft",
         "Draft reviewed Playwright journey selectors from ADO test steps and a read-only local UI snapshot; never executes tests.",
-        "testwizz journey-draft [path] (--plan-id <id> [--area <area>] [--list-only] | --workitem <id> --plan <ado-plan.json> --case <id>) [--url <loopback-url>] [--out <dir>]",
+        "testwizz journey-draft [path] (--plan-id <id> [--area <area>] [--list-only] | --workitem <id> --plan <ado-plan.json> --case <id>) [--url <loopback-url>] [--storage-state <file>] [--out <dir>]",
         [
             new("--url", "Running HTTP loopback application URL.", "url"),
             new("--workitem", "ADO work item ID.", "id"),
@@ -80,6 +80,7 @@ public static class JourneyDraftCommand
             new("--plan-id", "Export all cases of an ADO plan and resolve explicit Tested By links.", "id"),
             new("--area", "ADO Area Path for trace export (defaults to the plan project root).", "path"),
             new("--list-only", "List plan-to-requirement links without calling AI or opening the browser."),
+            new("--storage-state", "DocWizz-compatible Playwright login state, relative to the application repository.", "file"),
             new("--out", "Draft output directory outside the repository.", "dir"),
         ], 1, Run);
 
@@ -152,7 +153,9 @@ public static class JourneyDraftCommand
         catch (ProposalException ex) { throw new CliException(ex.Code, ex.Message); }
 
         string snapshot = context.Options.TryGetValue("--batch-snapshot", out var cached) && cached is not null
-            ? cached : UiCommand.CaptureSnapshot(root, url.ToString(), context.CancellationToken);
+            ? cached : UiCommand.CaptureSnapshot(root, url.ToString(), context.CancellationToken,
+                BrowserStorageState.Resolve(context, root, url));
+        snapshot = BrowserStorageState.RedactSnapshot(snapshot);
         var prompt = new StringBuilder()
             .Append("Route: ").Append(url.PathAndQuery)
             .Append("\nADO test-case title: ").Append(PromptData.Neutralize(testCase.Title))

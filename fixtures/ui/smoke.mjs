@@ -20,6 +20,7 @@ let broken = false;
 let requested = 0;
 let websocketConnections = 0;
 let writeRequests = 0;
+let authorizedRequests = 0;
 let app;
 let model;
 let socketServer;
@@ -48,6 +49,33 @@ const modelAnswer = {
   ],
   assumptions: ['The route starts with an empty address and does not require authentication.']
 };
+
+function protectedHtml() {
+  // JWT-authenticated SPA: loads data only after sessionStorage or localStorage
+  // is restored, as in DocWizz screenshot captures.
+  return `<!doctype html><html><head><title>Protected order</title></head>
+<body><main><h1>Loading</h1></main><script>
+  const token = sessionStorage.getItem('accessToken') || localStorage.getItem('accessToken');
+  if (!token) {
+    document.querySelector('main').innerHTML = '<h1>Sign in</h1><input type="password">';
+  } else {
+    fetch('/api/me', {headers: {Authorization: 'Bearer ' + token}})
+      .then(response => { if (!response.ok) throw Error('Access denied'); return response.json(); })
+      .then(() => {
+        document.querySelector('main').innerHTML =
+          '<h1>Create order</h1><form><label for="address">Delivery address</label>' +
+          '<input id="address"><button type="submit">Place order</button></form>' +
+          '<p role="status" hidden>Order created</p>';
+        document.querySelector('form').addEventListener('submit', event => {
+          event.preventDefault();
+          document.querySelector('[role=status]').hidden = false;
+        });
+      }).catch(() => {
+        document.querySelector('main').innerHTML = '<h1>Sign in</h1><input type="password">';
+      });
+  }
+</script></body></html>`;
+}
 
 function html(wsPort) {
   return `<!doctype html>
@@ -95,6 +123,18 @@ try {
   app = createServer((request, response) => {
     if (request.method === 'POST') writeRequests++;
     response.setHeader('Content-Type', 'text/html; charset=utf-8');
+    if (request.url === '/api/me') {
+      const token = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.synthetic_signature';
+      const allowed = request.headers.authorization === 'Bearer ' + token;
+      if (allowed) authorizedRequests++;
+      response.setHeader('Content-Type', 'application/json');
+      response.writeHead(allowed ? 200 : 401).end(JSON.stringify({ authorized: allowed }));
+      return;
+    }
+    if (request.url === '/secured') {
+      response.writeHead(200).end(protectedHtml());
+      return;
+    }
     if (request.url !== '/orders/new') {
       response.writeHead(404).end('Not found');
       return;
@@ -116,6 +156,8 @@ try {
         assert.match(prompt, /2\. Action: Enter delivery address/);
         assert.match(prompt, /3\. Action: Place order/);
         assert.match(prompt, /Read-only accessible UI snapshot/);
+        assert.match(prompt, /Delivery address/);
+        assert.doesNotMatch(prompt, /eyJhbGciOiJIUzI1NiJ9/, 'The model must not receive session JWTs');
         const draftResponse = {
           steps: [
             { stepId: 2, action: 'fill', label: 'Delivery address', value: 'Dock 3',
@@ -282,6 +324,58 @@ try {
       assert.ok(callout.target);
     }
   }
+
+  // Reuse a DocWizz-compatible state including the sessionStorage extension
+  // for both read-only drafting and approved browser capture.
+  const stateDir = join(project, '.auth');
+  await mkdir(stateDir);
+  const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.synthetic_signature';
+  const origin = 'http://127.0.0.1:' + appPort;
+  const protectedUrl = origin + '/secured';
+  await writeFile(join(stateDir, 'docwizz-state.json'), JSON.stringify({
+    cookies: [],
+    origins: [{ origin: origin + '/', localStorage: [], sessionStorage: [{ name: 'accessToken', value: jwt }] }]
+  }));
+  const env = { ...process.env, PATH: fakeBin + ':' + process.env.PATH,
+    TESTWIZZ_STORAGE_STATE: '.auth/docwizz-state.json' };
+  const authDraft = JSON.parse((await execute('dotnet', [
+    dll, 'journey-draft', project, '--url', protectedUrl,
+    '--workitem', '4711', '--plan', adoPlan, '--case', '512',
+    '--out', join(temporary, 'auth-drafts'), '--format', 'json'
+  ], { timeout: 90000, env })).stdout);
+  assert.equal(authDraft.status, 'ok');
+  assert.equal(authDraft.result.needsReview, true);
+  assert.ok(authorizedRequests >= 1, 'Authenticated snapshot must access the JWT-protected API');
+  assert.doesNotMatch(await readFile(authDraft.result.reviewNotes, 'utf8'), /eyJhbGciOiJIUzI1NiJ9/);
+
+  const authCapture = JSON.parse((await execute('dotnet', [
+    dll, 'journey', project, '--url', protectedUrl,
+    '--workitem', '4711', '--plan', adoPlan, '--case', '512',
+    '--steps', 'journey.json', '--out', join(temporary, 'auth-evidence'),
+    '--format', 'json'
+  ], { timeout: 90000, env })).stdout);
+  assert.equal(authCapture.status, 'ok');
+  assert.equal(authCapture.result.steps, 2);
+  assert.ok(authorizedRequests >= 2, 'Reviewed capture must reuse JWT state');
+  const authManifest = await readFile(join(authCapture.result.path, 'manifest.json'), 'utf8');
+  assert.doesNotMatch(authManifest, /eyJhbGciOiJIUzI1NiJ9/, 'No JWT in evidence manifest');
+
+  // Expired tokens must fail with a generic, non-leaking diagnostic.
+  await writeFile(join(stateDir, 'docwizz-state.json'), JSON.stringify({
+    cookies: [],
+    origins: [{ origin, localStorage: [], sessionStorage: [{ name: 'accessToken', value: 'invalid-secret-token' }] }]
+  }));
+  let rejected;
+  try {
+    await execute('dotnet', [
+      dll, 'journey-draft', project, '--url', protectedUrl,
+      '--workitem', '4711', '--plan', adoPlan, '--case', '512',
+      '--out', join(temporary, 'expired-drafts'), '--format', 'json'
+    ], { timeout: 90000, env });
+  } catch (error) { rejected = error; }
+  assert.ok(rejected, 'Expired JWT must fail closed');
+  assert.match(rejected.stdout ?? '', /ui.auth_failed/);
+  assert.doesNotMatch((rejected.stdout ?? '') + (rejected.stderr ?? ''), /invalid-secret-token/);
 
   broken = true;
   let failure;

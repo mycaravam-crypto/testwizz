@@ -24,13 +24,14 @@ public static class JourneyCommand
     public static CommandDefinition Definition { get; } = new(
         "journey",
         "Capture screenshot evidence from reviewed ADO test-case steps. Never executes AI-generated code.",
-        "testwizz journey [path] --url <loopback-url> --workitem <id> --plan <ado-plan.json> --case <id> --steps <reviewed.json> [--out <dir>]",
+        "testwizz journey [path] --url <loopback-url> --workitem <id> --plan <ado-plan.json> --case <id> --steps <reviewed.json> [--storage-state <file>] [--out <dir>]",
         [
             new("--url", "Running HTTP loopback application URL.", "url"),
             new("--workitem", "ADO work-item ID (read via ado workitem context).", "id"),
             new("--plan", "File exported using ado testplan export.", "json"),
             new("--case", "Test-case ID in the exported plan.", "id"),
             new("--steps", "Repository-relative reviewed declarative browser steps.", "json"),
+            new("--storage-state", "DocWizz-compatible Playwright login state, relative to the application repository.", "file"),
             new("--out", "Evidence directory outside the repository.", "dir"),
         ], 1, Run);
 
@@ -132,6 +133,7 @@ public static class JourneyCommand
         var wiId = Positive(context.Options, "--workitem");
         var caseId = Positive(context.Options, "--case");
         var root = context.PathArgument();
+        var storageState = BrowserStorageState.Resolve(context, root, url);
         var planPath = context.Options.GetValueOrDefault("--plan");
         var stepsPath = context.Options.GetValueOrDefault("--steps");
         if (string.IsNullOrWhiteSpace(planPath) || string.IsNullOrWhiteSpace(stepsPath))
@@ -170,13 +172,11 @@ public static class JourneyCommand
         if (Directory.Exists(final))
             throw new CliException("journey.exists", "Evidence already exists for these inputs; remove it explicitly before recapturing.");
         Directory.CreateDirectory(staging);
-        var helper = Path.Combine(Path.GetTempPath(), "testwizz-journey-" + Guid.NewGuid().ToString("N") + ".mjs");
+        string? helper = null;
         try
         {
-            using (var resource = typeof(JourneyCommand).Assembly.GetManifestResourceStream("ui-journey.mjs")
-                ?? throw new CliException("journey.helper_missing", "Embedded Playwright helper missing."))
-            using (var file = File.Create(helper)) resource.CopyTo(file);
-            var captured = Capture(root, url.ToString(), stepsFull, staging, helper, context.CancellationToken);
+            helper = UiBrowserHelpers.Create("ui-journey.mjs");
+            var captured = Capture(root, url.ToString(), stepsFull, staging, helper, storageState, context.CancellationToken);
             var browser = captured.GetProperty("stepIds").EnumerateArray().Select(x => x.GetInt32()).ToArray();
             var guideRecords = captured.GetProperty("guides").EnumerateArray().ToArray();
             if (browser.Length != spec.Steps.Count || guideRecords.Length != spec.Steps.Count)
@@ -259,12 +259,12 @@ public static class JourneyCommand
         }
         finally
         {
-            if (File.Exists(helper)) File.Delete(helper);
+            if (helper is not null) UiBrowserHelpers.Delete(helper);
             if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true);
         }
     }
 
-    private static JsonElement Capture(string root, string url, string spec, string output, string helper, CancellationToken token)
+    private static JsonElement Capture(string root, string url, string spec, string output, string helper, string? storageState, CancellationToken token)
     {
         if (!File.Exists(Path.Combine(root, "package.json")))
             throw new CliException("journey.playwright_missing", "Target repository needs package.json and @playwright/test.");
@@ -275,6 +275,7 @@ public static class JourneyCommand
             },
         };
         foreach (var item in new[] { helper, root, url, spec, output }) process.StartInfo.ArgumentList.Add(item);
+        if (storageState is not null) process.StartInfo.ArgumentList.Add(storageState);
         try { process.Start(); }
         catch (Win32Exception) { throw new CliException("journey.node_missing", "Node.js is required."); }
         try
@@ -287,9 +288,14 @@ public static class JourneyCommand
             {
                 process.WaitForExitAsync(timeout.Token).GetAwaiter().GetResult();
                 var response = stdout.GetAwaiter().GetResult();
-                _ = stderr.GetAwaiter().GetResult(); // Never include browser logs or page contents.
+                var diagnostics = stderr.GetAwaiter().GetResult(); // Never expose browser logs or page contents.
                 if (process.ExitCode != 0)
+                {
+                    if (diagnostics.Contains("TESTWIZZ_AUTH_FAILED", StringComparison.Ordinal))
+                        throw new CliException("journey.auth_failed",
+                            "The saved browser session was rejected or expired. Re-record the DocWizz storage state.");
                     throw new CliException("journey.capture_failed", "Reviewed Playwright journey failed. No evidence published.");
+                }
                 if (response.Length > 8192)
                     throw new CliException("journey.capture_invalid", "Unexpectedly large browser response.");
                 using var json = JsonDocument.Parse(response);

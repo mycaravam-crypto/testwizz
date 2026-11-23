@@ -43,6 +43,7 @@
     <EmbeddedResource Include="../../scripts/vue-ts-context.mjs" LogicalName="vue-ts-context.mjs" />
     <EmbeddedResource Include="../../scripts/ui-snapshot.mjs" LogicalName="ui-snapshot.mjs" />
     <EmbeddedResource Include="../../scripts/ui-journey.mjs" LogicalName="ui-journey.mjs" />
+    <EmbeddedResource Include="../../scripts/ui-auth.mjs" LogicalName="ui-auth.mjs" />
   </ItemGroup>
 
 </Project>
