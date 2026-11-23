@@ -95,8 +95,7 @@ public static class JourneyDraftBatch
 
         // Export from the configured ADO project, never guess requirement relationships.
         var planJson = RunAdo(root, context.CancellationToken, "testplan", "export", planId.ToString(CultureInfo.InvariantCulture));
-        using var planDocument = ParsePlan(planJson);
-        var project = planDocument.RootElement.GetProperty("project").GetString()!;
+        var project = ReadPlanProject(planJson);
         var area = context.Options.GetValueOrDefault("--area") ?? project;
         if (string.IsNullOrWhiteSpace(area))
             throw new CliException("journey_batch.area", "The ADO Area Path cannot be empty.");
@@ -233,16 +232,17 @@ public static class JourneyDraftBatch
         return success ? ExitCodes.Success : ExitCodes.ValidationFailed;
     }
 
-    private static JsonDocument ParsePlan(string json)
+    private static string ReadPlanProject(string json)
     {
         try
         {
-            var document = JsonDocument.Parse(json);
+            using var document = JsonDocument.Parse(json);
             var root = document.RootElement;
+            var project = root.GetProperty("project").GetString();
             if (root.GetProperty("format").GetString() != "ado-testplan/1" ||
-                string.IsNullOrWhiteSpace(root.GetProperty("project").GetString()))
+                string.IsNullOrWhiteSpace(project))
                 throw new CliException("journey_batch.plan", "ADO CLI returned an unsupported plan export.");
-            return document;
+            return project;
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException)
         {
@@ -252,6 +252,7 @@ public static class JourneyDraftBatch
 
     private static string RunAdo(string root, CancellationToken cancellationToken, params string[] args)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         using var process = new Process
         {
             StartInfo = new ProcessStartInfo("ado")
@@ -263,6 +264,8 @@ public static class JourneyDraftBatch
             },
         };
         foreach (var arg in args) process.StartInfo.ArgumentList.Add(arg);
+        // Drain stderr concurrently without exposing potentially sensitive ADO diagnostics.
+        process.ErrorDataReceived += static (_, _) => { };
         try { process.Start(); }
         catch (Win32Exception)
         {
@@ -270,26 +273,33 @@ public static class JourneyDraftBatch
         }
         try
         {
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(TimeSpan.FromMinutes(3));
-            var stdout = process.StandardOutput.ReadToEndAsync(timeout.Token);
-            var stderr = process.StandardError.ReadToEndAsync(timeout.Token);
-            try
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            limit.CancelAfter(TimeSpan.FromMinutes(10));
+            using var cancellation = limit.Token.Register(() =>
             {
-                process.WaitForExitAsync(timeout.Token).GetAwaiter().GetResult();
-                var value = stdout.GetAwaiter().GetResult();
-                _ = stderr.GetAwaiter().GetResult(); // ADO diagnostics may contain sensitive information.
-                if (process.ExitCode != 0)
-                    throw new CliException("journey_batch.ado_failed",
-                        "ADO export failed (exit " + process.ExitCode + "). Verify 'ado auth status' and project permissions.");
-                if (Encoding.UTF8.GetByteCount(value) > 16 * 1024 * 1024)
-                    throw new CliException("journey_batch.ado_size", "ADO export exceeds the 16 MiB batch limit.");
-                return value;
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                throw new CliException("journey_batch.ado_timeout", "ADO export exceeded the 3-minute limit.");
-            }
+                try
+                {
+                    if (!process.HasExited) process.Kill(entireProcessTree: true);
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
+                {
+                    // The child may have exited while cancellation was signaled.
+                }
+            });
+            process.BeginErrorReadLine();
+            // ADO prints one JSON document to stdout. This synchronous reader avoids
+            // sync-over-async and stays interruptible by the process-kill registration.
+            var value = process.StandardOutput.ReadToEnd();
+            process.WaitForExit();
+            cancellationToken.ThrowIfCancellationRequested();
+            if (limit.IsCancellationRequested)
+                throw new CliException("journey_batch.ado_timeout", "ADO export exceeded the 10-minute limit.");
+            if (process.ExitCode != 0)
+                throw new CliException("journey_batch.ado_failed",
+                    "ADO export failed (exit " + process.ExitCode + "). Verify 'ado auth status' and project permissions.");
+            if (Encoding.UTF8.GetByteCount(value) > 16 * 1024 * 1024)
+                throw new CliException("journey_batch.ado_size", "ADO export exceeds the 16 MiB batch limit.");
+            return value;
         }
         finally
         {
