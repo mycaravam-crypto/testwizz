@@ -1,16 +1,16 @@
 # TestWizz — Implementation Plan
 
-**Version:** 2.0 · **Status:** Proposed · **Stack:** .NET 10 CLI · **Targets:** .NET (xUnit) and Vue 3 (Vitest)
+**Version:** 2.0 · **Status:** implementation snapshot (2026-11-23) · **Stack:** .NET 10 CLI · **Implemented:** C#/xUnit test proposals, Vue context/planning, review-first UI proposals
 
 ## 1. Mission
 
-TestWizz is a local CLI that writes **reviewable unit tests** for .NET and Vue applications using a **local AI model** (Ollama or any OpenAI-compatible server on your machine/LAN). No code leaves your network.
+TestWizz generates **reviewable C#/xUnit test proposals** using a local AI model. It also supports Vue SFC/composable/store context and scenario planning, review-first Playwright proposals, and evidence from reviewed browser journeys. **Vue/Vitest generation and execution are not implemented.** Local model endpoints are private, but source excerpts and UI snapshots are passed to the configured model: use trusted, sanitized data.
 
 ```text
 pick target ─► gather context ─► plan scenarios ─► generate tests ─► validate ─► (run + repair) ─► review ─► apply
 ```
 
-### Goals
+### Target goals (some capabilities remain planned)
 
 1. Generate useful happy-path, boundary, negative and exception tests for a selected C# method/class or Vue component/composable/store.
 2. Follow the target project's existing conventions (framework, mocking library, naming, folder layout).
@@ -20,7 +20,7 @@ pick target ─► gather context ─► plan scenarios ─► generate tests �
 
 ### Non-goals (MVP)
 
-Integration/E2E/browser tests, editing production code, cloud AI, languages other than C# and TypeScript/JavaScript (Vue), coverage guarantees.
+Unattended execution of AI-generated browser tests, autonomous browser exploration, production code edits, cloud AI, languages outside supported stacks, and coverage guarantees. Review-first `ui` proposals and reviewed `journey` evidence are supported.
 
 ## 2. Key decisions
 
@@ -28,10 +28,10 @@ Integration/E2E/browser tests, editing production code, cloud AI, languages othe
 |----|----------|
 | ADR-1 | **Single .NET 10 CLI** (`testwizz`), distributed as a `dotnet tool`. Vue-specific parsing is delegated to a small Node helper script that runs with the **target project's own** `@vue/compiler-sfc`/`typescript`, so TestWizz bundles no JS toolchain. |
 | ADR-2 | **Pluggable context providers.** .NET: DocWizz adapter when DocWizz is installed (preferred, reuse don't copy its scanners), Roslyn-based fallback otherwise (a loose compilation of the repo's `.cs` files plus framework references, no MSBuild; NuGet types stay unresolved and are reported). Vue: built-in SFC/TS provider. All map to one `testwizz.context/v1` contract. Missing data is represented as *unavailable*, never guessed. |
-| ADR-3 | **Stack adapters**, not a generic framework: `DotNet` (xUnit first; NUnit/MSTest later) and `Vue` (Vitest + `@vue/test-utils` first; Jest later). Each adapter owns convention detection, prompt templates, static validation and run commands. |
+| ADR-3 | **Stack-specific capabilities.** C#/xUnit has generation, validation and container-only `run`/repair. Vue supports context and scenario planning but has no generated Vitest proposals or `run`. NUnit/MSTest/Jest are not implemented. |
 | ADR-4 | **Local AI only.** Ollama and OpenAI-compatible endpoints restricted to loopback/private IPs (checked at connect time, no proxy, TLS validated when used). API keys only from environment variables; `.env` is never auto-loaded; no public fallback. |
 | ADR-5 | **AI output is untrusted.** Structured JSON schema (Ollama `format` / `response_format`), schema + evidence validation, and source comments/docs treated as data, not instructions. |
-| ADR-6 | **Proposals first.** `generate` writes a proposal bundle outside the working tree. `run` executes tests only inside a container (Docker/Podman, network disabled). `apply` is a separate explicit command with stale-source checks. |
+| ADR-6 | **Proposals first.** `generate` and `ui` write bundles outside the working tree. `run` supports .NET only; dependency restore may use the network, while build/test run offline in Docker/Podman. `apply` is a separate explicit operation with stale-source checks. AI-generated UI tests are not executed by TestWizz. |
 
 ### Confirmed stack choices
 
@@ -47,9 +47,10 @@ src/TestWizz.Cli/          commands, config, JSON output, exit codes
 src/TestWizz.Core/         contracts, scenario planner, proposal bundle, validators
 src/TestWizz.AI/           Ollama + OpenAI-compatible clients, endpoint guard, prompt rendering
 src/TestWizz.DotNet/       Roslyn/DocWizz context, xUnit conventions + generator, dotnet test runner
-src/TestWizz.Vue/          Node helper (scripts/vue-context.mjs), Vitest conventions + generator, vitest runner
-tests/TestWizz.UnitTests/
-tests/TestWizz.ComponentTests/   fake DocWizz, fake AI server, fake container runtime
+src/TestWizz.Vue/          Vue target path validation (Vue context helpers currently live in CLI/scripts)
+tests/TestWizz.UnitTests/    golden, fake-model, and regression tests
+tests/TestWizz.IntegrationTests/    integration tests
+tests/TestWizz.E2ETests/          CLI smoke tests
 fixtures/dotnet/           calculator, service with DI, exceptions (xUnit v3 + NSubstitute)
 fixtures/vue/              TS SFC with props/emits, composable, Pinia store (Vitest)
 ```
@@ -66,41 +67,54 @@ Start with the fewest projects that work; split only when a second consumer appe
 
 ## 5. CLI
 
+Implemented commands (see [README.md](README.md) for full options):
+
 ```bash
-testwizz init                         # write testwizz.json (model endpoint, stack hints)
-testwizz ai check                     # verify local model is reachable and returns valid JSON
-testwizz context <path> --for <target> [--format json]
-testwizz plan    <path> --for <target>
-testwizz generate <path> --for <target> [--out <dir>]   # context + plan + tests → proposal
-testwizz run      --proposal <id>     # container-only build/test + bounded repair
-testwizz apply    --proposal <id>     # copy files into repo after stale checks
-testwizz generate <path> --since origin/main            # later: changed targets only
+testwizz init [path]                                    # create testwizz.yaml (legacy JSON supported)
+testwizz ai check [path]                                # check private local model
+testwizz context <path> --for <target>                  # C# or Vue target
+testwizz plan <path> --for <target> [--ai]              # C# or Vue scenarios
+testwizz generate <path> --for <csharp-method>          # xUnit proposal only
+testwizz generate <path> --since <ref> --list-changed   # C# changed-method report
+testwizz generate <path> --since <ref> --all-changed    # bounded C# batch
+testwizz bootstrap <path> --all [--resume]              # C# baseline
+testwizz run <path> --proposal <id>                     # .NET/xUnit only
+testwizz apply <path> --proposal <id>                   # guarded explicit apply
+testwizz ui <path> --url <loopback-url> --criteria <file.md>
+testwizz journey-draft <path> --url <loopback-url> --workitem <id> --plan <file> --case <id>
+testwizz journey <path> --url <loopback-url> --workitem <id> --plan <file> --case <id> --steps <file>
 ```
 
-Targets: `OrderService.PlaceOrder`, `OrderService` (all public methods), `src/components/CartItem.vue`, `src/composables/useCart.ts`, `src/stores/cart.ts`.
+`ui` accepts `--ado-workitem <id>` instead of `--criteria`. `apply --all` requires an explicit verification mode. Bootstrap and `--since` target C# only; `run` rejects Vue/UI bundles. `--format json` writes one versioned object to stdout and diagnostics to stderr. Exit codes: 0 success, 1 validation/test failure, 2 configuration/runtime error.
 
-`--format json` writes one versioned JSON object to stdout; diagnostics go to stderr. Exit codes: `0` success, `1` validation/test failure, `2` configuration or runtime error.
+`testwizz init` now creates `testwizz.yaml`; legacy `testwizz.json` remains supported. Example:
 
-Example `testwizz.json`:
-
-```json
-{
-  "ai": { "provider": "ollama", "endpoint": "http://127.0.0.1:11434", "model": "qwen2.5-coder:14b",
-          "apiKeyEnv": null, "timeoutSeconds": 120, "maxContextTokens": 16000 },
-  "run": { "runtime": "docker", "maxRepairAttempts": 2 },
-  "output": "../.testwizz-proposals"
-}
+```yaml
+version: 1
+ai:
+  provider: ollama
+  endpoint: http://127.0.0.1:11434
+  model: qwen2.5-coder:14b
+  apiKeyEnv: null
+  timeoutSeconds: 120
+  maxContextTokens: 16000
+run:
+  runtime: docker
+  maxRepairAttempts: 2
+output: ../.testwizz-proposals
 ```
 
 ## 6. Workflow
 
-1. **Context.** Resolve the target; on ambiguity return candidate ids. Keep only what the model needs: the target's source, signatures (not bodies) of its dependencies, one or two nearby existing tests as style examples. Respect `.gitignore`; cap size by token budget.
-2. **Conventions.** .NET: test project referencing the target project, xUnit version, mocking lib (Moq/NSubstitute/FakeItEasy), assertion lib (FluentAssertions/Shouldly/plain), naming pattern. Vue: `vitest` config, `@vue/test-utils`, `@pinia/testing`, `happy-dom`/`jsdom`, test file location (`__tests__/` vs `*.spec.ts`). Never add packages; report what's missing.
-3. **Plan.** Deterministic extraction first (guard clauses, `throw`, `switch`/`if` branches, comparisons, props validators, `emit` calls, `watch`/computed). The AI then enriches the plan with structured output. Expectations derived only from current code are marked `needsReview`.
-4. **Generate.** One prompt per target (or per method for large classes) using a versioned template per stack, plan + context + style example, JSON schema output `{ files[], scenarioIds, assumptions }`.
-5. **Static validation.** Schema and scenario links; path confinement (no traversal or symlink escapes); no overwrite of existing files; C# parsed with Roslyn; TS/Vue parsed via the Node helper; references to non-existent members flagged; empty/placeholder/skipped assertions flagged.
-6. **Run + repair (opt-in).** Copy repo + proposal into a container (`mcr.microsoft.com/dotnet/sdk` or `node`), restore dependencies, then run `dotnet test` / `vitest run` **with network disabled**. Parse results (TRX / Vitest JSON reporter). On compile or test failure feed diagnostics back to the model at most `maxRepairAttempts` times; repairs may only change generated test files and may not delete assertions or add skips. If a test still fails, keep it in the proposal, marked as a possible bug *or* bad test.
-7. **Review + apply.** Proposal bundle contains `manifest.json`, `plan.md`, test files, `changes.patch`, `findings.md`. `apply` refuses if source hashes changed or a target file already exists.
+1. **Context (C# and Vue):** Resolve target evidence with bounded excerpts. Missing data remains unavailable; related tests do not prove coverage.
+2. **Conventions (C#/xUnit):** Detect test project, xUnit version, naming and mocking style. Vue/Vitest convention detection and generation remain planned.
+3. **Plan (C# and Vue):** Extract deterministic scenarios and optionally enrich with the local model; maintain evidence references and `needsReview`.
+4. **Generate (C#/xUnit):** Produce structured, statically checked proposal bundles outside the working tree. Separately, `ui` produces review-first Playwright proposals from explicit acceptance criteria and a local UI snapshot.
+5. **Validate:** Enforce schema, evidence, path and stale-source checks. Report unsupported or ambiguous details instead of claiming success.
+6. **Run and repair (.NET/xUnit only):** Restore packages in a constrained container, build/test without network access, and bound AI repair attempts. `run` does not execute Vue/Vitest or Playwright proposals.
+7. **Review and apply:** Inspect bundles before guarded `apply`. Reviewed `journey` steps use a fixed browser interpreter for evidence; AI-generated JavaScript is not executed.
+
+`bootstrap --all` performs adaptive bounded parallel C# generation. Container execution and checkpoint writes remain serialized. The focused failure/resume regression remains open ([#27](https://github.com/mycaravam-crypto/testwizz/issues/27)).
 
 ## 7. Local model guidance
 
@@ -111,8 +125,8 @@ Example `testwizz.json`:
 
 ## 8. Safety rules (always on)
 
-- Only loopback/private endpoints; DNS re-checked per connection; proxies bypassed for model calls; no secrets in logs, prompts or output.
-- No writes to the working tree except via `apply`; no execution outside a container; fail closed if no container runtime.
+- Use only loopback/private model endpoints, re-check DNS per connection and bypass proxies. Treat context, UI snapshots, proposals and logs as sensitive. The targeted snapshot exposure assessment remains open in [#11](https://github.com/mycaravam-crypto/testwizz/issues/11).
+- Generated .NET tests run only in isolated containers and require an available container runtime. Reviewed `journey` actions can mutate data on a disposable local UI fixture; TestWizz does not run AI-generated UI tests. Proposed test files enter the repository only through explicit guarded `apply`.
 - Source text is untrusted prompt input; embedded instructions are ignored and covered by regression tests.
 - Timeouts, cancellation and token budgets on every AI call; AI unavailability never corrupts state.
 
@@ -121,20 +135,23 @@ Example `testwizz.json`:
 - **Unit:** config/arg parsing, endpoint guard, path confinement, scenario extraction, schema validation, hash/staleness checks.
 - **Component (offline, CI):** fake AI server (valid, malformed, empty, timeout, prompt injection), fake DocWizz CLI, fake container runtime.
 - **Fixture/golden:** `fixtures/dotnet` and `fixtures/vue` produce stable context and plan JSON (timestamps/order normalized).
-- **Model benchmark (manual/nightly, local):** per model, on both fixture sets: compile/parse rate, pass rate after repair, assertion quality, unsupported-assertion ratio, optional mutation score (Stryker.NET / StrykerJS). Test count alone is not quality.
+- **Real local-model acceptance (open):** one trusted UI route, two acceptance criteria, reviewed Playwright assertions and an intentional negative mutation ([#61](https://github.com/mycaravam-crypto/testwizz/issues/61)). Fake-model CI validates the pipeline, not real-model assertion quality.
 
-## 10. Milestones
+## 10. Milestones and remaining acceptance
 
-Each milestone ends with something a developer can actually use.
+Closing a milestone issue does not imply that every capability in its original roadmap description shipped.
 
-| Milestone | Delivers | Issues |
-|-----------|----------|--------|
-| **M0 — Foundation** | CLI skeleton, config, CI; local AI client + `ai check` | #1, #5 |
-| **M1 — .NET slice** | `context` / `plan` / `generate` for C# → xUnit proposal bundle with static validation | #2, #4, #7, #8 |
-| **M2 — Vue slice** | Same flow for Vue SFCs, composables and Pinia stores → Vitest proposals | #3, #6 |
-| **M3 — Run, repair, apply** | Container-isolated `run` for both stacks, bounded repair loop, guarded `apply` | #9, #10 |
-| **M4 — Workflow** | `--since` changed-code mode, CI report output, more frameworks (NUnit/MSTest/Jest) | #12 |
-| Cross-cutting | Quality benchmark + security regression suite, grows each milestone | #11 |
+| Milestone | Implemented on `main` | Not implemented / still open | Issues |
+|-----------|-----------------------|------------------------------|--------|
+| M0 — Foundation | .NET CLI, config, CI and local AI clients | No milestone blocker | #1, #5 closed |
+| M1 — .NET slice | C# context, scenario planning, xUnit proposal generation | Generated assertions still require review | #2, #4, #7, #8 closed |
+| M2 — Vue slice | SFC/composable/store context and Vue planning | No AI-generated Vitest proposals | #3, #6 closed, narrowed |
+| M3 — Run, repair, apply | Isolated .NET/xUnit run and repair; guarded apply | No Vue/Vitest or Playwright runner | #9, #10 closed, narrowed |
+| M4 — Workflow | C# `--since`, CI-oriented output, adaptive batch generation | No NUnit/MSTest/Jest adapters or Vue changed-code generation | #12 closed, narrowed |
+| UI quality | Local UI proposals and reviewed journey evidence | Real local-model acceptance [#61](https://github.com/mycaravam-crypto/testwizz/issues/61) | #61 open |
+| Safety and resilience | Endpoint controls, UI network restrictions, bootstrap checkpoints | Snapshot data exposure [#11](https://github.com/mycaravam-crypto/testwizz/issues/11) and failure/resume regression [#27](https://github.com/mycaravam-crypto/testwizz/issues/27) | #11, #27 open |
+
+Extend framework support only when a concrete use case and acceptance criteria justify it.
 
 ## 11. Definition of Done
 
@@ -145,10 +162,10 @@ Each milestone ends with something a developer can actually use.
 - No implicit execution, package installation or working-tree changes.
 - Uncertainty (`needsReview`, unavailable fields, failing tests) is visible in the output, never hidden.
 
-## 12. Notes for Claude Code
+## 12. Maintenance discipline
 
-1. Implement one issue per PR, starting with #1; link the issue in the PR.
-2. Before writing the DocWizz adapter, inspect the installed DocWizz's real output; don't invent fields. If DocWizz is absent, the Roslyn fallback is the path.
-3. Avoid speculative abstractions and unjustified dependencies.
-4. Report build/test results honestly; never delete assertions or skip tests to get green.
-5. Update this plan when a decision changes.
+1. Keep README commands, architecture and milestone status aligned with working code.
+2. Use one focused PR for each validated change; do not imply support for unimplemented adapters.
+3. Avoid speculative abstractions or dependencies, and preserve explicit security boundaries.
+4. Report CI and real-model acceptance separately. Never weaken assertions or skip tests merely to obtain a green result.
+5. Update this plan when the implementation or decisions change.

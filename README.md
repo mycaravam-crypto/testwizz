@@ -1,24 +1,24 @@
 # testwizz
 
-Generate reviewable unit tests for **.NET (xUnit)** and **Vue 3 (Vitest)** applications with a **local AI model** (Ollama or any OpenAI-compatible server). Your code never leaves your network.
+Generate reviewable **C#/xUnit test proposals** with a local AI model (Ollama or an OpenAI-compatible server). TestWizz also offers **Vue 3 context and scenario planning** and **review-first Playwright UI proposals**. Model endpoints are limited to private networks; use sanitized source and UI data, as these are supplied to the configured model.
 
-Status: early development. See [PLAN.md](PLAN.md) for the design and milestones.
+Status: active development. C#/xUnit generation and isolated .NET execution, Vue context/planning, UI proposals and reviewed journey evidence are implemented. **AI-generated Vue/Vitest tests and Vue/UI execution by `testwizz run` are not implemented.** Real-model UI acceptance and sensitive-snapshot validation remain open ([#61](https://github.com/mycaravam-crypto/testwizz/issues/61), [#11](https://github.com/mycaravam-crypto/testwizz/issues/11)). See [PLAN.md](PLAN.md) for scope and milestones.
 
 ## Commands (implemented so far)
 
 | Command | Description |
 |---------|-------------|
 | `testwizz help [command]` | Show available commands or help for one command. |
-| `testwizz init [path] [--force]` | Create a default `testwizz.json` in a directory. Refuses to overwrite without `--force`. |
-| `testwizz config [path]` | Validate `testwizz.json` and show the effective configuration. |
+| `testwizz init [path] [--force]` | Create a default `testwizz.yaml` in a directory. Refuses to overwrite without `--force`. |
+| `testwizz config [path]` | Validate `testwizz.yaml` or legacy `testwizz.json` and show the effective configuration. |
 | `testwizz ai check [path]` | Check that the configured model is reachable, private, installed and returns schema-valid JSON. |
-| `testwizz context [path] --for <target>` | Show the `testwizz.context/v1` context for a C# type or method (signature, source excerpt, injected dependencies, thrown exceptions, related tests). |
-| `testwizz plan [path] --for <method> [--ai]` | Plan evidence-linked test scenarios (`testwizz.plan/v1`); `--ai` lets the local model propose more. |
+| `testwizz context [path] --for <target>` | Show `testwizz.context/v1` for a C# type/method or a Vue SFC, composable or Pinia store. |
+| `testwizz plan [path] --for <method> [--ai]` | Plan evidence-linked C# or Vue scenarios (`testwizz.plan/v1`); `--ai` lets the local model propose more. |
 | `testwizz generate [path] --for <method> [--out <dir>] [--ai-plan]` or `testwizz generate [path] --since <ref> [--list-changed] [--for <method>]` | Plan, let the local model write xUnit tests, validate them and save a proposal bundle outside the repository. The repository is not changed. |
 | `testwizz ui [path] --url <loopback-url> (--criteria <file.md> \| --ado-workitem <id>)` | Generate review-first Playwright UI proposals from a local route and explicit Markdown or Azure DevOps work-item acceptance criteria; does not execute tests. |
 | `testwizz journey [path] --url <loopback-url> --workitem <id> --plan <ado-plan.json> --case <id> --steps <reviewed.json>` | Capture step screenshots and assertion evidence from a reviewed ADO test case; does not execute AI-generated code. |
 | `testwizz journey-draft [path] --url <loopback-url> --workitem <id> --plan <ado-plan.json> --case <id>` | Have the configured local AI propose reviewed declarative browser steps from the ADO case and accessible UI snapshot; never executes tests. |
-| `testwizz run [path] --proposal <id> [--no-repair] [--image <image>] [--timeout <s>]` | Build and run a proposal's tests in a Docker/Podman container with the network off, and let the model repair failing tests (bounded). Results go into the bundle. Never runs on the host. |
+| `testwizz run [path] --proposal <id> [--no-repair] [--image <image>] [--timeout <s>]` | Build and run **.NET/xUnit proposals only** in Docker/Podman. Restore can access package feeds; build/test are network-disabled. Bounded AI repair updates the proposal bundle, not the repository. Vue/UI proposals are unsupported. |
 | `testwizz apply [path] --proposal <id> [--allow-unverified]` | Copy a proposal's new test files into the repository after stale and overwrite checks. Nothing is committed. |
 
 ### UI acceptance criteria from Azure DevOps Server
@@ -126,9 +126,9 @@ testwizz bootstrap . --all --format json        # one aggregate JSON object on s
 testwizz bootstrap . --all --resume             # resume an interrupted scan
 ```
 
-The initial implementation discovers public/internal/protected-internal C# methods with bodies, using overload-safe documentation IDs; tests and ignored files are excluded. It processes all eligible targets sequentially, writes progress to stderr, and records per-target generation and run outcomes. Proposal files stay **outside** the repository and are **not applied automatically**. Generation requires a configured local model; running requires Docker/Podman.
+Bootstrap discovers public/internal/protected-internal C# methods with bodies, using overload-safe documentation IDs; tests and ignored files are excluded. **Generation uses bounded adaptive parallel waves**; container execution and checkpoint writes remain serialized. Progress is written to stderr (optionally as `--progress-jsonl`), and per-target generation/run outcomes are recorded. Proposals stay **outside** the repository and are **not applied automatically**. Generation requires a configured local model; running requires Docker/Podman.
 
-**Current limitations:** C# / xUnit only; no Vue generation, mid-request AI state recovery, or automatic application. The number of eligible methods is not a guarantee of comprehensive test coverage; inferred expectations still require review.
+**Bootstrap limitations:** C#/xUnit only; no Vue bootstrap, mid-request AI state recovery, or automatic application. `--resume` reuses successfully completed targets from a matching checkpoint. The focused resume/failure-isolation regression is still open ([#27](https://github.com/mycaravam-crypto/testwizz/issues/27)). Target count is not a coverage guarantee; inferred expectations require review.
 
 
 ## Minimal UI test proposals (experimental)
@@ -396,7 +396,7 @@ Layout: `src/TestWizz.Cli` (commands, output), `src/TestWizz.Core` (configuratio
 testwizz context . --for src/components/CartItem.vue --format json
 ```
 
-Uses Node.js, `@vue/compiler-sfc` and `typescript` **from the target project's node_modules**; install its dependencies first. The bundled read-only Node helper parses the component and reports script bindings into `testwizz.context/v1`. The first slice does not yet extract full props/emits or composables/stores; those fields are marked unavailable. No model calls or repository modifications.
+Vue context uses Node.js and the target project's `@vue/compiler-sfc`/`typescript` dependencies. Bundled read-only helpers extract SFCs and `.ts` composables/stores into `testwizz.context/v1`. Statically detectable prop, emit and slot names are supported, while details such as defaults and dynamic slots may remain unavailable. Context extraction does not call the model or change the repository. **Vue/Vitest test generation and execution are not implemented.**
 
 ### Vue surface extraction
 
