@@ -102,6 +102,45 @@ public sealed class BatchResumeTests
     }
 
     [Fact]
+    public void ManifestAlone_DoesNotAuthorizeReusingEditedGeneratedTests()
+    {
+        var rootDir = Path.Combine(Path.GetTempPath(), "testwizz-resume-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(rootDir, "source");
+        var output = Path.Combine(rootDir, "output");
+        var bundle = Path.Combine(output, "proposal");
+        var testsDir = Path.Combine(bundle, "files", "tests");
+        Directory.CreateDirectory(root);
+        Directory.CreateDirectory(testsDir);
+        try
+        {
+            const string generated = "using Xunit; public class SampleTests { [Fact] public void Test() {} }";
+            var generatedFile = Path.Combine(testsDir, "SampleTests.cs");
+            File.WriteAllText(generatedFile, generated);
+            var fileSha = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(generated)));
+            var manifest = new JsonObject
+            {
+                ["schema"] = "testwizz.proposal/v1",
+                ["id"] = "proposal",
+                ["sources"] = new JsonArray(),
+                ["files"] = new JsonArray(new JsonObject
+                {
+                    ["path"] = "tests/SampleTests.cs", ["sha256"] = fileSha,
+                }),
+            };
+            var manifestPath = Path.Combine(bundle, "manifest.json");
+            File.WriteAllText(manifestPath, manifest.ToJsonString());
+            var manifestSha = BatchResume.ShaFile(manifestPath);
+            Assert.True(BatchResume.IntactProposal(root, output, bundle, manifestSha));
+
+            File.AppendAllText(generatedFile, "\n// intentionally edited");
+            Assert.True(BatchResume.Intact(root, output, manifestPath, manifestSha));
+            Assert.False(BatchResume.IntactProposal(root, output, bundle, manifestSha));
+        }
+        finally { Directory.Delete(rootDir, recursive: true); }
+    }
+
+    [Fact]
     public void ResumeFlags_RejectNonBatchCalls()
     {
         using var stdout = new StringWriter();
