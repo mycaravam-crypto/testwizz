@@ -362,6 +362,160 @@ public sealed class RunCommandTests : IDisposable
         Assert.Equal("run.unknown_framework", Assert.Throws<ProposalException>(() => DotNetTestRunner.DefaultImage("netstandard2.0")).Code);
 }
 
+/// <summary>Runs that share a <see cref="RestoreCache"/>: identical restore inputs are restored once.</summary>
+public sealed class RestoreCacheTests : IDisposable
+{
+    private readonly string _fixture = RepoPaths.CopyToTemp(RepoPaths.DotNetFixture);
+    private readonly string _proposals = Directory.CreateTempSubdirectory("testwizz-proposals-").FullName;
+    private readonly FakeRuntime _runtime = new();
+
+    public RestoreCacheTests() => _runtime.Respond = spec =>
+    {
+        switch (FakeRuntime.Phase(spec))
+        {
+            case "restore":
+                // What a real restore leaves behind: obj output in the workspace, packages in the package folder.
+                var obj = Path.Combine(spec.Workspace, "tests", "Shop.Tests", "obj");
+                Directory.CreateDirectory(obj);
+                File.WriteAllText(Path.Combine(obj, "project.assets.json"), "{}");
+                var packages = spec.Mounts!.Single(m => m.ContainerPath == "/nuget").HostPath;
+                File.WriteAllText(Path.Combine(packages, "xunit.nupkg.metadata"), "{}");
+                break;
+            case "test":
+                FakeRuntime.WriteTrx(spec, Bundles.Trx(("Divide_ReturnsQuotient", "Passed", null), ("Divide_ByZero_Throws", "Passed", null), ("Divide_ByOne_ReturnsDividend", "Passed", null)));
+                break;
+        }
+
+        return new ContainerResult(0, "ok", TimeSpan.FromSeconds(1), false);
+    };
+
+    public void Dispose()
+    {
+        TestTempDirectories.Delete(_fixture);
+        TestTempDirectories.Delete(_proposals);
+    }
+
+    private static readonly RunOptions Options = new(null, TimeSpan.FromMinutes(5), ContainerLimits.Default);
+
+    private Task<RunOutput> Run(DotNetTestRunner runner, string? code = null) =>
+        runner.RunAsync(_fixture, ProposalReader.Load(Bundles.Create(_fixture, _proposals, code ?? CannedTests.Divide)), Options,
+            TestContext.Current.CancellationToken);
+
+    private string[] Phases() => [.. _runtime.Runs.Select(r => FakeRuntime.Phase(r.Spec))];
+
+    [Fact]
+    public async Task IdenticalRestoreInputs_AreRestoredOnceAndPackagesAreMountedReadOnly()
+    {
+        using var cache = new RestoreCache();
+        var runner = new DotNetTestRunner(_runtime, cache);
+
+        var first = await Run(runner);
+        var second = await Run(runner, CannedTests.Divide.Replace("Divide(8, 2)", "Divide(6, 3)", StringComparison.Ordinal));
+
+        Assert.Equal(RunStatus.Passed, first.Result.Status);
+        Assert.Equal(RunStatus.Passed, second.Result.Status);
+        Assert.Equal(["restore", "build", "test", "build", "test"], Phases());
+        Assert.Equal(1, cache.Restores);
+        Assert.False(first.Result.Phases[0].Reused);
+        Assert.True(second.Result.Phases[0].Reused);
+        Assert.Equal(0, second.Result.Phases[0].DurationMs);
+        Assert.Contains("reused an identical restore", second.Logs["restore.log"], StringComparison.Ordinal);
+
+        var restore = _runtime.Runs[0];
+        Assert.True(restore.Spec.Network);
+        Assert.DoesNotContain(restore.Files, f => f.EndsWith(".cs", StringComparison.Ordinal));
+        Assert.Equal([new ContainerMount(restore.Spec.Mounts![0].HostPath, "/nuget", ReadOnly: false)], restore.Spec.Mounts);
+        foreach (var (spec, files) in _runtime.Runs.Skip(1))
+        {
+            Assert.False(spec.Network);
+            // Every run has its own workspace, with restore's obj output copied in and the packages mounted read-only.
+            Assert.NotEqual(restore.Spec.Workspace, spec.Workspace);
+            Assert.Contains("tests/Shop.Tests/obj/project.assets.json", files);
+            Assert.Contains("tests/Shop.Tests/CalculatorDivideTests.cs", files);
+            Assert.DoesNotContain(files, f => f.EndsWith(".nupkg.metadata", StringComparison.Ordinal));
+            Assert.Equal([new ContainerMount(restore.Spec.Mounts[0].HostPath, "/nuget", ReadOnly: true)], spec.Mounts);
+            Assert.Equal("/nuget", spec.Environment["NUGET_PACKAGES"]);
+        }
+
+        // Run workspaces are removed after each run; the shared restore lives until the batch disposes the cache.
+        Assert.All(_runtime.Runs.Skip(1), r => Assert.False(Directory.Exists(r.Spec.Workspace)));
+        Assert.True(Directory.Exists(restore.Spec.Workspace));
+        cache.Dispose();
+        Assert.False(Directory.Exists(restore.Spec.Workspace));
+        Assert.False(Directory.Exists(restore.Spec.Mounts[0].HostPath));
+    }
+
+    [Fact]
+    public async Task ChangedRestoreInputs_AreRestoredAgain()
+    {
+        using var cache = new RestoreCache();
+        var runner = new DotNetTestRunner(_runtime, cache);
+
+        await Run(runner);
+        var project = Path.Combine(_fixture, "tests", "Shop.Tests", "Shop.Tests.csproj");
+        File.WriteAllText(project, File.ReadAllText(project).Replace("</Project>", "<!-- changed --></Project>", StringComparison.Ordinal));
+        var second = await Run(runner);
+
+        Assert.Equal(["restore", "build", "test", "restore", "build", "test"], Phases());
+        Assert.False(second.Result.Phases[0].Reused);
+    }
+
+    [Fact]
+    public async Task FailedRestore_IsNotReused()
+    {
+        using var cache = new RestoreCache();
+        var runner = new DotNetTestRunner(_runtime, cache);
+        var respond = _runtime.Respond;
+        _runtime.Respond = _ => new ContainerResult(1, "error NU1301: Unable to load the service index", TimeSpan.Zero, false);
+
+        var failed = await Run(runner);
+        _runtime.Respond = respond;
+        var retried = await Run(runner);
+
+        Assert.Equal(RunStatus.RestoreFailed, failed.Result.Status);
+        Assert.Equal(RunStatus.Passed, retried.Result.Status);
+        Assert.Equal(["restore", "restore", "build", "test"], Phases());
+        Assert.False(retried.Result.Phases[0].Reused);
+    }
+
+    [Fact]
+    public async Task ConcurrentRuns_ShareOneInFlightRestore()
+    {
+        using var cache = new RestoreCache();
+        var runner = new DotNetTestRunner(_runtime, cache);
+        var release = new TaskCompletionSource();
+        var respond = _runtime.Respond;
+        _runtime.Respond = spec =>
+        {
+            if (FakeRuntime.Phase(spec) == "restore") release.Task.Wait(TimeSpan.FromSeconds(10));
+            return respond(spec);
+        };
+        var proposals = new[] { CannedTests.Divide, CannedTests.Divide.Replace("Divide(8, 2)", "Divide(6, 3)", StringComparison.Ordinal) }
+            .Select(code => ProposalReader.Load(Bundles.Create(_fixture, _proposals, code))).ToArray();
+
+        var runs = proposals.Select(p => Task.Run(() => runner.RunAsync(_fixture, p, Options, TestContext.Current.CancellationToken))).ToArray();
+        await Task.Delay(200, TestContext.Current.CancellationToken);
+        release.SetResult();
+        var results = await Task.WhenAll(runs);
+
+        Assert.All(results, r => Assert.Equal(RunStatus.Passed, r.Result.Status));
+        Assert.Equal(1, cache.Restores);
+        Assert.Single(results, r => r.Result.Phases[0].Reused);
+    }
+
+    [Fact]
+    public void ContainerArguments_IncludeMountsReadOnlyWhenAsked()
+    {
+        var spec = new ContainerSpec("testwizz-x-build", "img", "/tmp/ws", ["dotnet", "build"], Network: false, ContainerLimits.Default,
+            new Dictionary<string, string>(), [new("/tmp/pkgs", "/nuget", ReadOnly: true), new("/tmp/rw", "/rw", ReadOnly: false)]);
+
+        var args = CliContainerRuntime.RunArguments(spec, ContainerRuntime.Podman, null);
+
+        Assert.Equal(["--volume", "/tmp/ws:/work", "--volume", "/tmp/pkgs:/nuget:ro", "--volume", "/tmp/rw:/rw", "--workdir", "/work"],
+            args.SkipWhile(a => a != "--volume").Take(8));
+    }
+}
+
 /// <summary>
 /// Real containers. Enabled with TESTWIZZ_DOCKER_TESTS=1 (CI sets it); TESTWIZZ_DOCKER_IMAGE overrides the SDK image,
 /// e.g. one that trusts a corporate TLS proxy.
@@ -429,6 +583,27 @@ public sealed class DockerRunTests : IDisposable
         Assert.Equal(11, error.Line);
 
         Assert.Equal(before, Directory.EnumerateFiles(_fixture, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal).ToList());
+        Assert.Empty(LeftoverContainers());
+    }
+
+    [Fact]
+    public async Task SharedRestore_BuildsAndTestsAgainstReadOnlyPackages()
+    {
+        RequireDocker();
+        using var cache = new RestoreCache();
+        var runner = new DotNetTestRunner(new CliContainerRuntime(ContainerRuntime.Docker), cache);
+        var options = new RunOptions(_image, TimeSpan.FromSeconds(300), ContainerLimits.Default);
+
+        var first = await runner.RunAsync(_fixture, ProposalReader.Load(Bundles.Create(_fixture, _proposals, CannedTests.Divide)), options, TestContext.Current.CancellationToken);
+        var second = await runner.RunAsync(_fixture, ProposalReader.Load(Bundles.Create(_fixture, _proposals,
+            CannedTests.Divide.Replace("Assert.Equal(4,", "Assert.Equal(5,", StringComparison.Ordinal))), options, TestContext.Current.CancellationToken);
+
+        Assert.True(first.Result.Status == RunStatus.Passed, first.Logs.GetValueOrDefault("build.log") + first.Logs.GetValueOrDefault("test.log"));
+        // The second run reused the restore and still built and ran its own tests against the read-only packages.
+        Assert.True(second.Result.Phases[0].Reused);
+        Assert.Equal(1, cache.Restores);
+        Assert.Equal(RunStatus.Failed, second.Result.Status);
+        Assert.Equal("Divide_ReturnsQuotient", Assert.Single(second.Result.Tests, t => t.Outcome == "failed").Method);
         Assert.Empty(LeftoverContainers());
     }
 

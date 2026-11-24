@@ -29,7 +29,8 @@ public sealed record CommandContext(
     Func<ContainerRuntime, IContainerRuntime>? ContainerRuntimes = null,
     RoslynContextProvider? SharedProvider = null,
     ModelClient? SharedModel = null,
-    IContainerRuntime? SharedRuntime = null)
+    IContainerRuntime? SharedRuntime = null,
+    RestoreCache? SharedRestoreCache = null)
 {
     /// <summary>The container runtime to use; tests replace it with a fake.</summary>
     public IContainerRuntime Runtime(ContainerRuntime runtime) =>

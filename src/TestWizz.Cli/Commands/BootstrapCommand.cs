@@ -172,7 +172,8 @@ public static class BootstrapCommand
             }
         ProgressEvent(context, "discovered", targets.Length, counts.Done, null, null, clock.Elapsed, counts);
         var pending = targets.Where(target => !valid.ContainsKey(target)).ToArray();
-        var generatedResults = new Dictionary<string, BootstrapItem>(recovered, StringComparer.Ordinal);
+        // Written by the coordinator while verification workers read it: generation and verification overlap.
+        var generatedResults = new System.Collections.Concurrent.ConcurrentDictionary<string, BootstrapItem>(recovered, StringComparer.Ordinal);
         // Full worker utilization from the first target, with no head-of-line blocking
         // when one inference is slower than the rest. Only the coordinator writes state.
         var preparationSeconds = clock.Elapsed.TotalSeconds;
@@ -184,8 +185,89 @@ public static class BootstrapCommand
         if (pending.Length > 0)
             ProgressEvent(context, "generation-started", targets.Length, counts.Done,
                 pending[0], null, clock.Elapsed, counts);
-        BatchWorkQueue.RunAsync(
+        // The runtime CLI can be expensive (Docker/Podman version performs a daemon handshake): check it once per
+        // batch, the first time a target needs it. Every test still gets a dedicated, disposable workspace and
+        // uniquely named containers; no shared writable test/build directories.
+        var runtimeCheck = new Lazy<Task<(IContainerRuntime? Runtime, string? Problem, string Name)>>(async () =>
+        {
+            var candidate = context.Runtime(config.Run.Runtime);
+            var problem = await candidate.CheckAsync(context.CancellationToken).ConfigureAwait(false);
+            return (problem is null ? candidate : null, problem, candidate.Name);
+        }, LazyThreadSafetyMode.ExecutionAndPublication);
+        // Targets with identical restore inputs share one restore; its packages are mounted read-only.
+        using var restoreCache = new RestoreCache();
+
+        BootstrapVerified VerifyOne(string target)
+        {
+            var item = generatedResults[target];
+            var generation = item.Generation;
+            var outcome = "not-run";
+            var proposal = item.Proposal;
+            var failure = item.Failure;
+            using var runDiagnostics = new StringWriter(CultureInfo.InvariantCulture);
+            if (generation == "ok" && proposal is not null && !context.Has("--generate-only"))
+            {
+                var (checkedRuntime, runtimeProblem, runtimeName) = runtimeCheck.Value.GetAwaiter().GetResult();
+                if (runtimeProblem is not null)
+                {
+                    failure = BatchFailure.Create("run.no_container_runtime", $"No usable container runtime: {runtimeProblem} " +
+                        $"TestWizz never runs generated tests on the host; start {runtimeName} or " +
+                        "set run.runtime in testwizz.json.");
+                    outcome = "error";
+                }
+                else
+                {
+                    try
+                    {
+                        using var runOutput = new StringWriter(CultureInfo.InvariantCulture);
+                        var runContext = context with
+                        {
+                            Command = RunCommand.Definition,
+                            Options = RunOptions(context, proposal),
+                            Output = new CliOutput(runOutput, runDiagnostics, OutputFormat.Json),
+                            SharedRuntime = checkedRuntime,
+                            SharedRestoreCache = restoreCache,
+                        };
+                        var runExit = RunCommand.Definition.Handler(runContext);
+                        outcome = runExit == ExitCodes.Success ? "passed" : "failed";
+                        if (outcome == "failed") failure = RunFailure(runOutput.ToString());
+                    }
+                    catch (Exception ex) when (ex is CliException or InvalidOperationException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException)
+                    {
+                        failure = ex is CliException cli ? BatchFailure.From(cli) : BatchFailure.Create("run.error", ex.Message);
+                        outcome = "error";
+                    }
+                }
+            }
+            else if (generation == "error") outcome = "error";
+            return new BootstrapVerified(target, generation, outcome, proposal, failure,
+                runDiagnostics.ToString(), item.Attempts);
+        }
+
+        var verifiedResults = new Dictionary<string, BootstrapVerified>(StringComparer.Ordinal);
+        var verificationClock = new Stopwatch();
+        var generated = 0;
+        var generationFinished = false;
+        void FinishGeneration()
+        {
+            generationFinished = true;
+            generationClock.Stop();
+            if (pending.Length > 0)
+                progress.Pulse($"{(counts.Generated + counts.Failed) / Math.Max(0.001, generationClock.Elapsed.TotalSeconds):F2} targets/s · " +
+                    (fixedWorkers ? $"{maxWorkers} workers" : $"adaptive {adaptive.Current} of {maxWorkers} workers") + $" · {counts.Detail()}");
+            // Targets verified while generation was still running are already counted.
+            progress.Stage(context.Has("--generate-only") ? "review" : "verify", targets.Length,
+                completed.Count + verifiedResults.Count, context.Has("--generate-only")
+                    ? "Finalizing proposals" : "Running isolated tests");
+        }
+        if (pending.Length == 0) FinishGeneration();
+
+        // Each target is verified as soon as its generation finishes, while other targets are still being
+        // generated: model requests and container runs overlap instead of running as two separate phases.
+        // Recovered proposals (generated in an earlier run) are verified straight away.
+        BatchWorkQueue.RunPipelineAsync(
             pending,
+            [.. targets.Where(recovered.ContainsKey)],
             maxWorkers,
             (target, _) => Task.FromResult(GenerateTarget(context, provider, model, target, retries, retryDelay)),
             (target, item, active) =>
@@ -205,87 +287,16 @@ public static class BootstrapCommand
                 progress.Update(counts.Done, item.Target, failed: counts.Failed, active: active);
                 ProgressEvent(context, "generated", targets.Length, counts.Done, item.Target,
                     item.Generation, clock.Elapsed, counts, item.Failure, item.Proposal, item.Attempts.Count + 1);
+                if (++generated == pending.Length) FinishGeneration();
+                return true;
             },
-            null,
-            (done, active) => progress.Pulse($"Waiting for {active} model request(s) · {counts.Detail()}", active),
-            context.CancellationToken,
-            () => fixedWorkers ? maxWorkers : adaptive.Current).GetAwaiter().GetResult();
-        generationClock.Stop();
-        if (pending.Length > 0)
-            progress.Pulse($"{(counts.Generated + counts.Failed) / Math.Max(0.001, generationClock.Elapsed.TotalSeconds):F2} targets/s · " +
-                (fixedWorkers ? $"{maxWorkers} workers" : $"adaptive {adaptive.Current} of {maxWorkers} workers") + $" · {counts.Detail()}");
-
-        progress.Stage(context.Has("--generate-only") ? "review" : "verify", targets.Length,
-            completed.Count, context.Has("--generate-only")
-                ? "Finalizing proposals" : "Running isolated tests");
-
-        var remainingForVerification = targets.Where(target => !completed.ContainsKey(target)).ToArray();
-        // The runtime CLI can be expensive (Docker/Podman version performs a daemon handshake).
-        // Check once for this batch. Every test still gets a dedicated, disposable workspace
-        // and uniquely named containers; no shared writable test/build directories.
-        IContainerRuntime? checkedRuntime = null;
-        string? runtimeProblem = null;
-        string? runtimeName = null;
-        if (!context.Has("--generate-only") && remainingForVerification.Any(target =>
-            generatedResults[target].Generation == "ok" && generatedResults[target].Proposal is not null))
-        {
-            var candidate = context.Runtime(config.Run.Runtime);
-            runtimeName = candidate.Name;
-            runtimeProblem = candidate.CheckAsync(context.CancellationToken).GetAwaiter().GetResult();
-            if (runtimeProblem is null) checkedRuntime = candidate;
-        }
-
-        BootstrapVerified VerifyOne(string target)
-        {
-            var item = generatedResults[target];
-            var generation = item.Generation;
-            var outcome = "not-run";
-            var proposal = item.Proposal;
-            var failure = item.Failure;
-            using var runDiagnostics = new StringWriter(CultureInfo.InvariantCulture);
-            if (generation == "ok" && proposal is not null && !context.Has("--generate-only"))
-            {
-                if (runtimeProblem is not null)
-                {
-                    failure = BatchFailure.Create("run.no_container_runtime", $"No usable container runtime: {runtimeProblem} " +
-                        $"TestWizz never runs generated tests on the host; start {runtimeName} or " +
-                        "set run.runtime in testwizz.json.");
-                    outcome = "error";
-                }
-                else
-                {
-                    try
-                    {
-                        using var runOutput = new StringWriter(CultureInfo.InvariantCulture);
-                        var runContext = context with
-                        {
-                            Command = RunCommand.Definition,
-                            Options = RunOptions(context, proposal),
-                            Output = new CliOutput(runOutput, runDiagnostics, OutputFormat.Json),
-                            SharedRuntime = checkedRuntime,
-                        };
-                        var runExit = RunCommand.Definition.Handler(runContext);
-                        outcome = runExit == ExitCodes.Success ? "passed" : "failed";
-                        if (outcome == "failed") failure = RunFailure(runOutput.ToString());
-                    }
-                    catch (Exception ex) when (ex is CliException or InvalidOperationException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException)
-                    {
-                        failure = ex is CliException cli ? BatchFailure.From(cli) : BatchFailure.Create("run.error", ex.Message);
-                        outcome = "error";
-                    }
-                }
-            }
-            else if (generation == "error") outcome = "error";
-            return new BootstrapVerified(target, generation, outcome, proposal, failure,
-                runDiagnostics.ToString(), item.Attempts);
-        }
-
-        var verifiedResults = new Dictionary<string, BootstrapVerified>(StringComparer.Ordinal);
-        var verificationClock = Stopwatch.StartNew();
-        BatchWorkQueue.RunAsync(
-            remainingForVerification,
             verifyWorkers,
-            (target, _) => Task.FromResult(VerifyOne(target)),
+            (target, _) =>
+            {
+                lock (verificationClock)
+                    if (!verificationClock.IsRunning) verificationClock.Start();
+                return Task.FromResult(VerifyOne(target));
+            },
             (target, result, active) =>
             {
                 verifiedResults[target] = result;
@@ -304,14 +315,18 @@ public static class BootstrapCommand
                 var failures = verifiedResults.Values.Count(row => row.Generation != "ok" ||
                     row.Execution is not ("passed" or "not-run"));
                 var done = completed.Count + verifiedResults.Count;
-                progress.Update(done, target, failed: failures, active: active);
+                if (generationFinished) progress.Update(done, target, failed: failures, active: active);
                 ProgressEvent(context, "finalized", targets.Length, done, target,
                     result.Generation == "ok" && result.Execution is "passed" or "not-run" ? "ok" : "failed",
                     clock.Elapsed, counts, result.Failure, result.Proposal, execution: execution);
             },
-            null,
-            (done, active) => progress.Pulse($"Waiting for {active} isolated test run(s)", active),
-            context.CancellationToken).GetAwaiter().GetResult();
+            (generating, verifying) => progress.Pulse(generationFinished
+                ? $"Waiting for {verifying} isolated test run(s)"
+                : $"Waiting for {generating} model request(s)" +
+                  (verifying > 0 ? $" and {verifying} isolated test run(s)" : "") + $" · {counts.Detail()}",
+                generationFinished ? verifying : generating),
+            context.CancellationToken,
+            () => fixedWorkers ? maxWorkers : adaptive.Current).GetAwaiter().GetResult();
         verificationClock.Stop();
 
         // Aggregate in source order, independent of concurrent completion order.

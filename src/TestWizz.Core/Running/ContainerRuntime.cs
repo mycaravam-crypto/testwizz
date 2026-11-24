@@ -16,6 +16,7 @@ public sealed record ContainerLimits(double Cpus, int MemoryMegabytes, int Pids)
 /// the user's repository is never mounted.
 /// </summary>
 /// <param name="Network">Only dependency restore gets a network; build and test always run with <c>--network none</c>.</param>
+/// <param name="Mounts">Additional host directories, e.g. a dependency cache shared by the runs of one batch.</param>
 public sealed record ContainerSpec(
     string Name,
     string Image,
@@ -23,10 +24,14 @@ public sealed record ContainerSpec(
     IReadOnlyList<string> Command,
     bool Network,
     ContainerLimits Limits,
-    IReadOnlyDictionary<string, string> Environment)
+    IReadOnlyDictionary<string, string> Environment,
+    IReadOnlyList<ContainerMount>? Mounts = null)
 {
     public const string ContainerWorkspace = "/work";
 }
+
+/// <summary>A host directory mounted into a container; read-only unless the container must write to it.</summary>
+public sealed record ContainerMount(string HostPath, string ContainerPath, bool ReadOnly);
 
 /// <param name="TimedOut">The container was stopped because it exceeded its time limit.</param>
 public sealed record ContainerResult(int ExitCode, string Output, TimeSpan Duration, bool TimedOut);
@@ -106,8 +111,13 @@ public sealed class CliContainerRuntime(ContainerRuntime runtime) : IContainerRu
             "--memory", $"{spec.Limits.MemoryMegabytes.ToString(CultureInfo.InvariantCulture)}m",
             "--pids-limit", spec.Limits.Pids.ToString(CultureInfo.InvariantCulture),
             "--volume", $"{spec.Workspace}:{ContainerSpec.ContainerWorkspace}",
-            "--workdir", ContainerSpec.ContainerWorkspace,
         };
+        foreach (var mount in spec.Mounts ?? [])
+        {
+            args.AddRange(["--volume", $"{mount.HostPath}:{mount.ContainerPath}{(mount.ReadOnly ? ":ro" : "")}"]);
+        }
+
+        args.AddRange(["--workdir", ContainerSpec.ContainerWorkspace]);
 
         // Rootless Podman already maps container root to the calling user; Docker needs the uid so the host can
         // delete the workspace afterwards.

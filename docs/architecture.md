@@ -31,4 +31,4 @@ Move the Vue context and scenario providers behind the `TestWizz.Vue` boundary w
 
 ## Bounded batch execution
 
-Model requests use a replenished bounded queue, independent container verification uses `--verify-workers` and each test still has a separate ephemeral workspace. Checkpoints remain coordinator-owned.
+Model requests use a replenished bounded queue, independent container verification uses `--verify-workers` and each test still has a separate ephemeral workspace. Bootstrap runs the two stages as one pipeline (`BatchWorkQueue.RunPipelineAsync`): a target is verified as soon as its generation finishes, while other targets are still being generated. Checkpoints remain coordinator-owned: every completion callback of both stages runs on the one coordinator. A `RestoreCache` shared by the batch restores identical restore inputs once; build and test containers mount its package folder read-only.

@@ -16,10 +16,13 @@ public sealed record RunOutput(RunResult Result, IReadOnlyDictionary<string, str
 /// made in the system temp folder. Phase 1 (<c>dotnet restore</c>, with network) sees only project and build files;
 /// the sources and the proposed tests are added afterwards, so repository and model-written code only ever runs in
 /// phases 2 and 3 (<c>dotnet build</c>, <c>dotnet test</c>) with <c>--network none</c>.
+/// With a shared <see cref="RestoreCache"/>, runs with identical restore inputs reuse one restore: its package
+/// folder is mounted read-only into their build and test containers.
 /// </summary>
-public sealed partial class DotNetTestRunner(IContainerRuntime runtime)
+public sealed partial class DotNetTestRunner(IContainerRuntime runtime, RestoreCache? restoreCache = null)
 {
     private const string Scratch = ".testwizz-run";
+    private const string PackagesMount = "/nuget";
     private const string TrxName = "testwizz.trx";
     private const int MaxRepositoryFiles = 200_000;
 
@@ -34,7 +37,7 @@ public sealed partial class DotNetTestRunner(IContainerRuntime runtime)
     {
         ["HOME"] = $"{ContainerSpec.ContainerWorkspace}/{Scratch}/home",
         ["DOTNET_CLI_HOME"] = $"{ContainerSpec.ContainerWorkspace}/{Scratch}/home",
-        ["NUGET_PACKAGES"] = $"{ContainerSpec.ContainerWorkspace}/{Scratch}/nuget",
+        ["NUGET_PACKAGES"] = PackagesMount,
         ["DOTNET_NOLOGO"] = "1",
         ["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1",
         ["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1",
@@ -81,21 +84,29 @@ public sealed partial class DotNetTestRunner(IContainerRuntime runtime)
         var deadline = DateTime.UtcNow + options.Timeout;
         var phases = new List<RunPhase>();
         var logs = new Dictionary<string, string>(StringComparer.Ordinal);
+        var cache = restoreCache ?? new RestoreCache();
         try
         {
             var files = RepositoryFiles.Files(root, "*", MaxRepositoryFiles)
                 .Where(f => !f.Split('/').Any(s => s is "bin" or "obj" or ".git" or Scratch))
                 .ToList();
             var restoreFiles = files.Where(IsRestoreFile).ToList();
-            Copy(root, workspace, restoreFiles);
-            Directory.CreateDirectory(Path.Combine(workspace, Scratch, "home"));
-
-            var restore = await Phase("restore", network: true, ["dotnet", "restore", testProject]).ConfigureAwait(false);
-            if (restore.TimedOut || restore.ExitCode != 0)
+            var restoreCommand = new[] { "dotnet", "restore", testProject };
+            var (restored, reused) = await cache.GetAsync(
+                RestoreCache.Key(root, restoreFiles, image, testProject),
+                directory => Restore(directory, restoreFiles, restoreCommand)).ConfigureAwait(false);
+            logs["restore.log"] = $"$ {string.Join(' ', restoreCommand)}\n{(reused ? "(reused an identical restore from this batch)\n" : "")}{restored.Log}";
+            phases.Add(reused
+                ? new RunPhase("restore", Network: false, restored.ExitCode, 0, TimedOut: false, Reused: true)
+                : new RunPhase("restore", Network: true, restored.ExitCode, restored.DurationMs, restored.TimedOut));
+            if (!restored.Succeeded)
             {
-                return Done(restore.TimedOut ? RunStatus.Timeout : RunStatus.RestoreFailed, [], []);
+                return Done(restored.TimedOut ? RunStatus.Timeout : RunStatus.RestoreFailed, [], []);
             }
 
+            // The restore files and restore's obj output; the package folder itself is only ever mounted read-only.
+            CopyTree(restored.Workspace, workspace);
+            Directory.CreateDirectory(Path.Combine(workspace, Scratch, "home"));
             Copy(root, workspace, files.Except(restoreFiles, StringComparer.Ordinal));
             foreach (var file in proposal.Files)
             {
@@ -104,7 +115,8 @@ public sealed partial class DotNetTestRunner(IContainerRuntime runtime)
                 File.WriteAllText(target, file.Content);
             }
 
-            var build = await Phase("build", network: false, ["dotnet", "build", testProject, "--no-restore", "-nologo"]).ConfigureAwait(false);
+            ContainerMount[] packages = [new(restored.Packages, PackagesMount, ReadOnly: true)];
+            var build = await Phase("build", workspace, network: false, ["dotnet", "build", testProject, "--no-restore", "-nologo"], packages).ConfigureAwait(false);
             if (build.TimedOut)
             {
                 return Done(RunStatus.Timeout, [], []);
@@ -115,11 +127,11 @@ public sealed partial class DotNetTestRunner(IContainerRuntime runtime)
                 return Done(RunStatus.CompileError, ParseBuildErrors(logs["build.log"], proposal), []);
             }
 
-            var test = await Phase("test", network: false,
+            var test = await Phase("test", workspace, network: false,
             [
                 "dotnet", "test", testProject, "--no-build", "--filter", filter,
                 "--logger", $"trx;LogFileName={TrxName}", "--results-directory", $"{ContainerSpec.ContainerWorkspace}/{Scratch}/results",
-            ]).ConfigureAwait(false);
+            ], packages).ConfigureAwait(false);
 
             var trxPath = Path.Combine(workspace, Scratch, "results", TrxName);
             var trx = File.Exists(trxPath) ? File.ReadAllText(trxPath) : null;
@@ -140,24 +152,47 @@ public sealed partial class DotNetTestRunner(IContainerRuntime runtime)
         finally
         {
             TryDelete(workspace);
+            if (restoreCache is null)
+            {
+                cache.Dispose();
+            }
         }
 
-        async Task<RunPhase> Phase(string name, bool network, IReadOnlyList<string> command)
+        // Runs in a cache directory of its own; only project and build files are present, sources are not.
+        async Task<RestoredDependencies> Restore(string directory, IReadOnlyList<string> restoreFiles, IReadOnlyList<string> command)
+        {
+            var restoreWorkspace = Path.Combine(directory, "work");
+            var packages = Path.Combine(directory, "packages");
+            Directory.CreateDirectory(packages);
+            Copy(root, restoreWorkspace, restoreFiles);
+            Directory.CreateDirectory(Path.Combine(restoreWorkspace, Scratch, "home"));
+            var (result, timedOut) = await Container("restore", restoreWorkspace, network: true, command,
+                [new(packages, PackagesMount, ReadOnly: false)]).ConfigureAwait(false);
+            return new RestoredDependencies(!timedOut && result.ExitCode == 0, result.ExitCode,
+                (long)result.Duration.TotalMilliseconds, timedOut, result.Output, restoreWorkspace, packages);
+        }
+
+        async Task<RunPhase> Phase(string name, string directory, bool network, IReadOnlyList<string> command, IReadOnlyList<ContainerMount> mounts)
+        {
+            var (result, timedOut) = await Container(name, directory, network, command, mounts).ConfigureAwait(false);
+            logs[$"{name}.log"] = $"$ {string.Join(' ', command)}\n{result.Output}";
+            var phase = new RunPhase(name, network, result.ExitCode, (long)result.Duration.TotalMilliseconds, timedOut);
+            phases.Add(phase);
+            return phase;
+        }
+
+        async Task<(ContainerResult Result, bool TimedOut)> Container(
+            string name, string directory, bool network, IReadOnlyList<string> command, IReadOnlyList<ContainerMount> mounts)
         {
             var remaining = deadline - DateTime.UtcNow;
             if (remaining <= TimeSpan.Zero)
             {
-                var skipped = new RunPhase(name, network, -1, 0, TimedOut: true);
-                phases.Add(skipped);
-                return skipped;
+                return (new ContainerResult(-1, "", TimeSpan.Zero, TimedOut: true), true);
             }
 
-            var spec = new ContainerSpec($"testwizz-{runId}-{name}", image, workspace, command, network, options.Limits, Environment);
+            var spec = new ContainerSpec($"testwizz-{runId}-{name}", image, directory, command, network, options.Limits, Environment, mounts);
             var result = await runtime.RunAsync(spec, remaining, cancellationToken).ConfigureAwait(false);
-            logs[$"{name}.log"] = $"$ {string.Join(' ', command)}\n{result.Output}";
-            var phase = new RunPhase(name, network, result.ExitCode, (long)result.Duration.TotalMilliseconds, result.TimedOut);
-            phases.Add(phase);
-            return phase;
+            return (result, result.TimedOut);
         }
 
         RunOutput Done(RunStatus status, IReadOnlyList<CompileError> errors, IReadOnlyList<TestOutcome> tests) =>
@@ -184,6 +219,23 @@ public sealed partial class DotNetTestRunner(IContainerRuntime runtime)
             var target = Path.Combine(workspace, file.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             File.Copy(source, target);
+        }
+    }
+
+    /// <summary>Copies a restore workspace, without its scratch folder (container home, caches).</summary>
+    private static void CopyTree(string source, string workspace)
+    {
+        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            var relative = Path.GetRelativePath(source, file);
+            if (relative.Split(Path.DirectorySeparatorChar)[0] == Scratch)
+            {
+                continue;
+            }
+
+            var target = Path.Combine(workspace, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target);
         }
     }
 
