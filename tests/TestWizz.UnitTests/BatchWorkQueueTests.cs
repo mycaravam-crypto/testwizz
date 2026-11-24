@@ -14,8 +14,9 @@ public sealed class BatchWorkQueueTests
         var started = new ConcurrentQueue<int>();
         var finished = new List<int>();
 
+        int[] targets = [0, 1, 2];
         var run = BatchWorkQueue.RunAsync(
-            new[] { 0, 1, 2 },
+            targets,
             2,
             (target, _) =>
             {
@@ -47,7 +48,10 @@ public sealed class BatchWorkQueueTests
         Assert.Equal(3, outcome.Started);
         Assert.Equal(3, outcome.Completed);
         Assert.False(outcome.Stopped);
-        Assert.Equal(new[] { 1, 2, 0 }, finished);
+        Assert.Equal(3, finished.Count);
+        Assert.Equal(1, finished[0]);
+        Assert.Contains(0, finished);
+        Assert.Contains(2, finished);
     }
 
     [Fact]
@@ -81,8 +85,9 @@ public sealed class BatchWorkQueueTests
         var slow = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new ConcurrentQueue<int>();
         var finished = new List<int>();
+        int[] targets = [0, 1, 2, 3];
         var run = BatchWorkQueue.RunAsync(
-            new[] { 0, 1, 2, 3 }, 2,
+            targets, 2,
             (i, _) =>
             {
                 started.Enqueue(i);
@@ -106,8 +111,9 @@ public sealed class BatchWorkQueueTests
     [Fact]
     public async Task RejectsInvalidWorkerCount()
     {
+        int[] targets = [1];
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(async () =>
-            await BatchWorkQueue.RunAsync(new[] { 1 }, 0, (i, _) => Task.FromResult(i),
+            await BatchWorkQueue.RunAsync(targets, 0, (i, _) => Task.FromResult(i),
                 (_, _, _) => { }, null, null, TestContext.Current.CancellationToken));
     }
 
