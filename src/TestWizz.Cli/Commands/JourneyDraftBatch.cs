@@ -204,7 +204,7 @@ public static class JourneyDraftBatch
                         // A plan export does not contain the complete current requirement revision.
                         // Check ADO again without calling AI before reusing a generated draft.
                         var current = AdoUiCriteria.Read(root, link.WorkItemId, context.CancellationToken);
-                        if (current.Revision == (int?)previous["workItemRevision"] &&
+                        if (current.Revision == previous["workItemRevision"]?.GetValue<int>() &&
                             string.Equals(current.Sha256, (string?)previous["criteriaSha256"],
                                 StringComparison.OrdinalIgnoreCase))
                         {
@@ -233,9 +233,9 @@ public static class JourneyDraftBatch
                             ["testCaseId"] = caseId, ["workItemId"] = link.WorkItemId,
                             ["status"] = "failed", ["reason"] = ex.Code,
                         });
-                        saved[key] = new JsonObject { ["key"] = key, ["status"] = "failed",
-                            ["reason"] = ex.Code };
-                        Save();
+                        // Preserve the verified previous row: a temporary ADO outage is
+                        // not evidence that its artifact became stale. Retry validation
+                        // on the next --resume without regenerating it prematurely.
                         continue;
                     }
                 }
@@ -284,7 +284,7 @@ public static class JourneyDraftBatch
                     {
                         ["key"] = key, ["status"] = "drafted",
                         ["testCaseId"] = caseId, ["workItemId"] = link.WorkItemId,
-                        ["workItemRevision"] = result?["workItemRevision"]?.GetValue<int>(),
+                        ["workItemRevision"] = result?["workItemRevision"]?.DeepClone(),
                         ["criteriaSha256"] = criteria,
                         ["path"] = draftPath, ["draftSha256"] = draftPath is null ? null : BatchResume.ShaFile(draftPath),
                         ["reviewNotes"] = reviewPath, ["reviewSha256"] = reviewPath is null ? null : BatchResume.ShaFile(reviewPath),
