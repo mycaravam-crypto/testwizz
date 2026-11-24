@@ -49,10 +49,10 @@ public sealed class ModelClientTests : IAsyncLifetime
             context.Response.ContentType = "application/json";
             await context.Response.WriteAsync("""
                 {"models":[{"name":"qwen2.5-coder:14b","digest":"sha256:new"}]}
-                """);
+                """, context.RequestAborted);
         });
         using var client = ModelClient.Create(TestSettings.Ollama(_server.BaseUri), _ => null);
-        await Assert.ThrowsAsync<ModelClientException>(() =>
+        await Assert.ThrowsAnyAsync<ModelClientException>(() =>
             client.ModelDigestAsync(TestContext.Current.CancellationToken));
         Assert.Equal("sha256:new", await client.ModelDigestAsync(TestContext.Current.CancellationToken));
         Assert.Equal(2, calls);
