@@ -54,6 +54,39 @@ public sealed class BatchResumeTests
     }
 
     [Fact]
+    public void RejectsDuplicateAndMalformedCheckpointEntries()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "testwizz-resume-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var file = Path.Combine(root, "checkpoint.json");
+            BatchResume.Save(file, "x/v1", "fingerprint", new JsonArray(
+                new JsonObject { ["target"] = "same" },
+                new JsonObject { ["target"] = "same" }));
+            Assert.Equal("resume.checkpoint_invalid",
+                Assert.Throws<CliException>(() => BatchResume.Read(file, "x/v1", "fingerprint")).Code);
+            BatchResume.Save(file, "x/v1", "fingerprint", new JsonArray(new JsonObject
+            {
+                ["status"] = "drafted",
+            }));
+            Assert.Equal("resume.checkpoint_invalid",
+                Assert.Throws<CliException>(() => BatchResume.Read(file, "x/v1", "fingerprint")).Code);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Theory]
+    [InlineData("{invalid")]
+    [InlineData("[]")]
+    [InlineData("null")]
+    public void AdoJson_InvalidDataFailsWithDomainError(string raw)
+    {
+        Assert.Equal("resume.input_invalid",
+            Assert.Throws<CliException>(() => BatchResume.StableAdoJson(raw)).Code);
+    }
+
+    [Fact]
     public void Fingerprint_DoesNotConfuseConcatenatedParts()
     {
         Assert.NotEqual(BatchResume.Fingerprint(["ab", "c"]), BatchResume.Fingerprint(["a", "bc"]));

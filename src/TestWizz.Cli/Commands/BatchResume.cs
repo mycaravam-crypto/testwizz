@@ -26,10 +26,17 @@ internal static class BatchResume
     /// <summary>ADO trace exports carry a new generatedAt value on every read.</summary>
     public static string StableAdoJson(string json)
     {
-        var data = JsonNode.Parse(json)?.AsObject()
-            ?? throw new CliException("resume.input_invalid", "The ADO snapshot is not a JSON object.");
-        data.Remove("generatedAt");
-        return data.ToJsonString();
+        try
+        {
+            var data = JsonNode.Parse(json)?.AsObject()
+                ?? throw new CliException("resume.input_invalid", "The ADO snapshot is not a JSON object.");
+            data.Remove("generatedAt");
+            return data.ToJsonString();
+        }
+        catch (Exception ex) when (ex is System.Text.Json.JsonException or InvalidOperationException)
+        {
+            throw new CliException("resume.input_invalid", "The ADO snapshot is not a valid JSON object.");
+        }
     }
 
     public static string? ShaFile(string file)
@@ -89,15 +96,27 @@ internal static class BatchResume
             if ((string?)state?["schema"] != schema ||
                 state?["items"] is not JsonArray items)
                 throw new CliException("resume.checkpoint_invalid", "Invalid batch checkpoint format.");
+            // Protect every batch implementation against duplicate, missing or malformed
+            // entries before any caller converts them to a dictionary.
+            var keys = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var entry in items)
+            {
+                if (entry is not JsonObject row)
+                    throw new CliException("resume.checkpoint_invalid", "Invalid checkpoint entry.");
+                var identity = (string?)row["target"] ?? (string?)row["key"];
+                if (string.IsNullOrWhiteSpace(identity) || !keys.Add(identity))
+                    throw new CliException("resume.checkpoint_invalid", "Missing or duplicate checkpoint target.");
+            }
             if ((string?)state["fingerprint"] != fingerprint)
                 throw new CliException("resume.changed",
                     "Inputs, source revisions, model settings, route or scope changed. " +
                     "Use a fresh output directory and start without --resume.");
             return items;
         }
-        catch (Exception ex) when (ex is System.Text.Json.JsonException or InvalidOperationException or ArgumentException)
+        catch (Exception ex) when (ex is System.Text.Json.JsonException or InvalidOperationException
+            or ArgumentException or IOException or UnauthorizedAccessException)
         {
-            throw new CliException("resume.checkpoint_invalid", "Invalid batch checkpoint JSON.");
+            throw new CliException("resume.checkpoint_invalid", "Invalid or inaccessible batch checkpoint JSON.");
         }
     }
 
