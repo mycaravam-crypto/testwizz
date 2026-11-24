@@ -401,19 +401,7 @@ public sealed class XUnitValidatorTests : IDisposable
         }
         """;
 
-    /// <summary>Validates <c>Assert.Equal(expected, EXPR)</c> against a repository with <c>FormType</c> extension methods.</summary>
-    private GenerationResult AssembleExtensionCall(string expression, string expected = "\"Order\"", bool importNamespace = true, string? testProjectUsing = null)
-    {
-        File.WriteAllText(Path.Combine(_fixture, "src", "Shop", "FormType.cs"), FormTypeSource);
-        File.WriteAllText(Path.Combine(_fixture, "src", "Shop", "FormTypeExtensions.cs"), FormTypeExtensionsSource);
-        if (testProjectUsing is not null)
-        {
-            var csproj = Path.Combine(_fixture, "tests", "Shop.Tests", "Shop.Tests.csproj");
-            File.WriteAllText(csproj, File.ReadAllText(csproj).Replace(
-                "<Using Include=\"Xunit\" />", "<Using Include=\"Xunit\" />\n    " + testProjectUsing, StringComparison.Ordinal));
-        }
-
-        var code = (importNamespace ? "using Shop.Forms;\n\n" : "") + """
+    private const string ExtensionCallTemplate = """
             namespace Shop.Tests;
 
             public class CalculatorDivideTests
@@ -434,7 +422,25 @@ public sealed class XUnitValidatorTests : IDisposable
                 [Trait("Scenario", "S3")]
                 public void Divide_ByOne_ReturnsDividend() => Assert.Equal(3, new Calculator().Divide(3, 1));
             }
-            """.Replace("EXPECTED", expected, StringComparison.Ordinal).Replace("EXPR", expression, StringComparison.Ordinal);
+            """;
+
+    /// <summary>1-based line of the call under test in <see cref="ExtensionCallTemplate"/> when the namespace is not imported.</summary>
+    private static int ExtensionCallLine =>
+        ExtensionCallTemplate.Split('\n').ToList().FindIndex(l => l.Contains("EXPR", StringComparison.Ordinal)) + 1;
+
+    /// <summary>Validates <c>Assert.Equal(expected, EXPR)</c> against a repository with <c>FormType</c> extension methods.</summary>
+    private GenerationResult AssembleExtensionCall(string expression, string expected = "\"Order\"", bool importNamespace = true, string? testProjectUsing = null)
+    {
+        File.WriteAllText(Path.Combine(_fixture, "src", "Shop", "FormType.cs"), FormTypeSource);
+        File.WriteAllText(Path.Combine(_fixture, "src", "Shop", "FormTypeExtensions.cs"), FormTypeExtensionsSource);
+        if (testProjectUsing is not null)
+        {
+            var csproj = Path.Combine(_fixture, "tests", "Shop.Tests", "Shop.Tests.csproj");
+            File.WriteAllText(csproj, File.ReadAllText(csproj).Replace(
+                "<Using Include=\"Xunit\" />", "<Using Include=\"Xunit\" />\n    " + testProjectUsing, StringComparison.Ordinal));
+        }
+
+        var code = (importNamespace ? "using Shop.Forms;\n\n" : "") + ExtensionCallTemplate.Replace("EXPECTED", expected, StringComparison.Ordinal).Replace("EXPR", expression, StringComparison.Ordinal);
         return Assemble("Calculator.Divide", code);
     }
 
@@ -480,7 +486,7 @@ public sealed class XUnitValidatorTests : IDisposable
         var finding = Assert.Single(result.Findings, f => f.Severity == "error");
         Assert.Equal("missing-using", finding.Code);
         Assert.Contains("using Shop.Forms;", finding.Message, StringComparison.Ordinal);
-        Assert.Equal(10, finding.Line);
+        Assert.Equal(ExtensionCallLine, finding.Line);
     }
 
     [Fact]

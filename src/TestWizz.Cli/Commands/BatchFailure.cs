@@ -66,7 +66,7 @@ internal sealed partial record BatchFailure(string Code, string Message)
     public static string SafeMessage(string? message)
     {
         if (string.IsNullOrWhiteSpace(message)) return "Unknown failure.";
-        var text = BrowserStorageState.RedactSnapshot(message);
+        var text = Jwt().Replace(message, "[JWT redacted]");
         text = Bearer().Replace(text, "$1[redacted]");
         text = Secret().Replace(text, "$1$2[redacted]");
         text = UserInfo().Replace(text, "$1[redacted]@");
@@ -90,6 +90,10 @@ internal sealed partial record BatchFailure(string Code, string Message)
         var safe = new string([.. code.Where(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-').Take(80)]);
         return safe.Length == 0 ? "error" : safe;
     }
+
+    // Self-contained on purpose: the redaction guarantee is owned and tested here, not by another feature's helper.
+    [GeneratedRegex(@"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?![A-Za-z0-9_-])", RegexOptions.CultureInvariant)]
+    private static partial Regex Jwt();
 
     [GeneratedRegex(@"HTTP (\d{3})", RegexOptions.CultureInvariant)]
     private static partial Regex HttpStatus();

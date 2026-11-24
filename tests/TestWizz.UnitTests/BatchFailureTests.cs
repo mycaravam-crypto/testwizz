@@ -37,6 +37,19 @@ public sealed class BatchFailureTests
         Assert.True(message.Length <= 401, message.Length.ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
+    [Theory]
+    [InlineData("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl")]
+    [InlineData("token expired: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl.")]
+    [InlineData("(eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl)")]
+    public void Jwts_AreRedactedByBatchFailureItself(string message)
+    {
+        var safe = BatchFailure.SafeMessage(message);
+
+        Assert.Contains("[JWT redacted]", safe, StringComparison.Ordinal);
+        Assert.DoesNotContain("eyJzdWIiOiIxIn0", safe, StringComparison.Ordinal);
+        Assert.DoesNotContain("c2lnbmF0dXJl", safe, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void GenerationFailure_UsesFirstValidationErrorWithLineAndCount()
     {
