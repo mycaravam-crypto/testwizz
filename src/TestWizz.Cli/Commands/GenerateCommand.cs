@@ -224,6 +224,8 @@ public static class GenerateCommand
         try { ProposalBundle.EnsureOutsideRepository(root, output); }
         catch (ProposalException ex) { throw new CliException(ex.Code, ex.Message); }
         Directory.CreateDirectory(output);
+        using var progress = BatchProgress.For(context, "generate");
+        progress.Stage("prepare", 0, detail: "Loading changed C# targets");
         using var model = ModelClient.Create(config.Ai, context.GetEnvironmentVariable);
         var provider = RoslynContextProvider.Load(root);
         var fingerprintParts = new List<string>
@@ -269,9 +271,8 @@ public static class GenerateCommand
         }
         if (!context.Has(ResumeOption)) Save();
         var pending = ranked.Where(row => !results.ContainsKey(row.Target)).ToArray();
-        context.Output.Stderr.WriteLine(
-            $"testwizz batch: {ranked.Count} changed method(s), {results.Count} verified from checkpoint, " +
-            $"{pending.Length} pending.");
+        progress.Stage("generate", ranked.Count, results.Count,
+            $"{pending.Length} pending · {results.Count} restored");
         var continueOnError = context.Has(ContinueOnErrorOption);
         var aborted = false;
         var workers = 1;
@@ -283,6 +284,7 @@ public static class GenerateCommand
             var count = Math.Min(workers, pending.Length - position);
             var start = position;
             var stopwatch = Stopwatch.StartNew();
+            progress.Update(results.Count, pending[start].Target, active: count);
             var tasks = Enumerable.Range(start, count).Select(index => Task.Run(() =>
             {
                 var target = pending[index].Target;
@@ -327,8 +329,7 @@ public static class GenerateCommand
                 var heartbeat = Task.Delay(TimeSpan.FromSeconds(15), context.CancellationToken);
                 if (Task.WhenAny(completion, heartbeat).GetAwaiter().GetResult() == heartbeat)
                 {
-                    context.Output.Stderr.WriteLine($"testwizz batch: {results.Count}/{ranked.Count} complete; " +
-                        $"waiting on {tasks.Count} LLM request(s).");
+                    progress.Pulse($"Waiting for {tasks.Count} model request(s)", tasks.Count);
                     continue;
                 }
                 var task = completion.GetAwaiter().GetResult();
@@ -338,22 +339,21 @@ public static class GenerateCommand
                 // A successful completion is durable even if another worker is cancelled.
                 Save();
                 failedWave |= item.Status != "ok";
-                if (item.DebugText.Length > 0) context.Output.Stderr.Write(item.DebugText);
-                context.Output.Stderr.WriteLine(
-                    $"testwizz batch: {results.Count}/{ranked.Count} {item.Target}: {item.Status} ({item.Seconds:F1}s)");
+                if (item.DebugText.Length > 0) progress.Diagnostics(item.DebugText);
+                progress.Update(results.Count, item.Target,
+                    failed: results.Values.Count(entry => entry.Status is "failed" or "error"), active: tasks.Count);
             }
             stopwatch.Stop();
             position += count;
             if (!continueOnError && failedWave)
             {
                 aborted = position < pending.Length;
-                context.Output.Stderr.WriteLine(
-                    $"testwizz batch: stopped after failed wave; {pending.Length - position} target(s) not started. " +
+                progress.Note($"Stopped after failed wave; {pending.Length - position} target(s) not started. " +
                     "Use --continue-on-error to process all.");
                 break;
             }
             var throughput = count / Math.Max(0.001, stopwatch.Elapsed.TotalSeconds);
-            context.Output.Stderr.WriteLine($"testwizz batch: workers={workers}, throughput={throughput:F3} targets/s");
+            progress.Pulse($"{throughput:F2} targets/s · {workers} worker(s)");
             if (workers > 1 && priorThroughput > 0 && throughput < priorThroughput * 0.9)
                 workers = Math.Max(1, workers - 1);
             else if (workers < limit && position < pending.Length)
@@ -384,6 +384,7 @@ public static class GenerateCommand
         markdown.Append(CultureInfo.InvariantCulture,
             $"\n{results.Count} of {ranked.Count} target(s) processed, {failed} failed; " +
             $"{ranked.Count - results.Count} not started. No repository files were modified.\n");
+        progress.Finish(results.Count, failed, detail: $"{ranked.Count - results.Count} not started");
         context.Output.Result("generate", new JsonObject
         {
             ["schema"] = "testwizz.generate-batch/v1",

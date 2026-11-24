@@ -35,6 +35,8 @@ public static class BootstrapCommand
     private static int Run(CommandContext context)
     {
         var clock = Stopwatch.StartNew();
+        using var progress = BatchProgress.For(context, "bootstrap", quiet: context.Has("--progress-jsonl"));
+        progress.Stage("scan", 0, detail: "Loading C# sources");
         var maxWorkers = 4;
         if (context.Options.TryGetValue("--max-workers", out var workerText)
             && (!int.TryParse(workerText, NumberStyles.None, CultureInfo.InvariantCulture, out maxWorkers) || maxWorkers is < 1 or > 8))
@@ -44,25 +46,30 @@ public static class BootstrapCommand
         var root = context.PathArgument();
         // Read the DocWizz scope before loading Roslyn. Excluded project sources must never be parsed.
         var includedProjects = DocWizzProjectScope.Read(root);
-        context.Output.Stderr.WriteLine(includedProjects is null
-            ? "testwizz bootstrap: loading C# sources and building Roslyn context..."
-            : $"testwizz bootstrap: loading only {includedProjects.Count} DocWizz-scoped project(s)...");
+        progress.Pulse(includedProjects is null
+            ? "Loading C# sources" : $"Loading {includedProjects.Count} scoped projects");
         context.CancellationToken.ThrowIfCancellationRequested();
         var includeFile = includedProjects is null ? null : ScopedSourceFilter(root, includedProjects);
         var provider = includeFile is null
             ? RoslynContextProvider.Load(root, context.CancellationToken)
             : RoslynContextProvider.Load(root, includeFile, context.CancellationToken);
-        context.Output.Stderr.WriteLine($"testwizz bootstrap: Roslyn context ready ({clock.Elapsed.TotalSeconds:F1}s); discovering eligible methods...");
+        progress.Stage("discover", 0, detail: "Scanning source files");
         var discoveryClock = Stopwatch.StartNew();
         var lastDiscoveryReport = TimeSpan.Zero;
+        var discoveryTotal = -1;
         var targets = provider.DiscoverMethods((done, total) =>
             {
+                if (total != discoveryTotal)
+                {
+                    discoveryTotal = total;
+                    progress.Stage("discover", total, done, "Scanning source files");
+                }
                 if (discoveryClock.Elapsed - lastDiscoveryReport < TimeSpan.FromSeconds(2) && done != total) return;
                 lastDiscoveryReport = discoveryClock.Elapsed;
-                context.Output.Stderr.WriteLine($"testwizz bootstrap: discovering methods: {done}/{total} source files ({discoveryClock.Elapsed.TotalSeconds:F1}s)");
+                progress.Update(done, "Scanning source files");
             }, context.CancellationToken).ToArray();
         context.CancellationToken.ThrowIfCancellationRequested();
-        context.Output.Stderr.WriteLine($"testwizz bootstrap: discovery completed ({clock.Elapsed.TotalSeconds:F1}s); loading configuration...");
+        progress.Stage("configure", 0, detail: "Loading configuration");
         var config = ConfigCommand.Load(Path.Combine(root, TestWizzConfig.FileName));
         using var model = ModelClient.Create(config.Ai, context.GetEnvironmentVariable);
         var outputDirectory = context.Options.TryGetValue("--out", out var custom) && !string.IsNullOrWhiteSpace(custom)
@@ -71,9 +78,9 @@ public static class BootstrapCommand
         ProposalBundle.EnsureOutsideRepository(root, outputDirectory);
         Directory.CreateDirectory(outputDirectory);
         var checkpoint = Path.Combine(outputDirectory, "bootstrap-checkpoint.json");
-        context.Output.Stderr.WriteLine("testwizz bootstrap: fingerprinting C# sources for safe resume...");
+        progress.Stage("fingerprint", 0, detail: "Checking source freshness");
         var fingerprint = Fingerprint(root, config, targets, context.Has("--generate-only"), includedProjects, provider.SourceHashes, context.CancellationToken);
-        context.Output.Stderr.WriteLine($"testwizz bootstrap: fingerprint ready ({clock.Elapsed.TotalSeconds:F1}s)");
+        progress.Pulse("Source fingerprint ready");
         const string checkpointSchema = "testwizz.bootstrap-checkpoint/v1";
         JsonArray saved;
         try
@@ -117,7 +124,8 @@ public static class BootstrapCommand
         var skipped = 0;
         var text = new StringBuilder("# Initial test baseline\n\n");
         text.Append("| Target | Generation | Execution | Proposal |\n|---|---|---|---|\n");
-        context.Output.Stderr.WriteLine($"Discovered {targets.Length} eligible C# method(s){(includedProjects is null ? "" : " in " + includedProjects.Count + " DocWizz-scoped project(s)")}. Recovered {completed.Count} completed and {recovered.Count} generated proposal(s).");
+        progress.Stage("generate", targets.Length, valid.Count,
+            $"{targets.Length - valid.Count} pending · {valid.Count} restored");
         ProgressEvent(context, "discovered", targets.Length, completed.Count, null, null, clock.Elapsed);
         var pending = targets.Where(target => !valid.ContainsKey(target)).ToArray();
         var generatedResults = new Dictionary<string, BootstrapItem>(recovered, StringComparer.Ordinal);
@@ -132,8 +140,8 @@ public static class BootstrapCommand
             var batch = pending.Skip(position).Take(workers).ToArray();
             var waveClock = Stopwatch.StartNew();
             ProgressEvent(context, "generation-started", targets.Length, completed.Count + position, batch[0], null, clock.Elapsed);
-            ReportProgress(context, completed.Count + position, targets.Length, batch[0], $"generating ({batch.Length} active)", clock.Elapsed);
-            context.Output.Stderr.WriteLine($"testwizz bootstrap: started wave at {position + 1}/{pending.Length}, workers={batch.Length}, first={batch[0]}");
+            progress.Update(valid.Count + position, batch[0], active: batch.Length);
+
             var tasks = batch.Select(target => Task.Run(() => GenerateTarget(context, provider, model, target),
                 context.CancellationToken)).ToList();
             var remaining = new List<Task<BootstrapItem>>(tasks);
@@ -146,7 +154,7 @@ public static class BootstrapCommand
                 var winner = Task.WhenAny(completion, heartbeat).GetAwaiter().GetResult();
                 if (winner == heartbeat)
                 {
-                    context.Output.Stderr.WriteLine($"testwizz bootstrap: waiting on {remaining.Count} LLM request(s), {clock.Elapsed:mm\\:ss} elapsed; completed {completed.Count + position + batch.Length - remaining.Count}/{targets.Length}");
+                    progress.Pulse($"Waiting for {remaining.Count} model request(s)", remaining.Count);
                     continue;
                 }
                 var completedTask = completion.GetAwaiter().GetResult();
@@ -167,16 +175,18 @@ public static class BootstrapCommand
                 };
                 // Persist each finished LLM request, even when container execution follows.
                 SaveState();
-                if (item.Diagnostics.Length > 0) context.Output.Stderr.Write(item.Diagnostics);
-                var done = completed.Count + position + batch.Length - remaining.Count;
-                ReportProgress(context, done, targets.Length, item.Target, "generated", clock.Elapsed);
+                if (item.Diagnostics.Length > 0) progress.Diagnostics(item.Diagnostics);
+                var done = valid.Count + position + batch.Length - remaining.Count;
+                progress.Update(done, item.Target,
+                    failed: checkpointItems.Values.Count(row => (string?)row["generation"] is "failed" or "error"),
+                    active: remaining.Count);
                 ProgressEvent(context, "generated", targets.Length, done, item.Target, item.Generation, clock.Elapsed);
-                context.Output.Stderr.WriteLine($"testwizz bootstrap generated: {item.Target}: {item.Generation} ({item.Seconds:F1}s)");
+
             }
             waveClock.Stop();
             position += batch.Length;
             var throughput = batch.Length / Math.Max(waveClock.Elapsed.TotalSeconds, 0.001);
-            context.Output.Stderr.WriteLine($"testwizz bootstrap: workers={workers}, throughput={throughput:F3} targets/s");
+            progress.Pulse($"{throughput:F2} targets/s · up to {workers} workers");
             if (workers > 1 && previousThroughput > 0 && throughput < previousThroughput * 0.9)
                 workers = Math.Max(1, workers - 1);
             else if (workers < maxWorkers && position < pending.Length)
@@ -184,6 +194,8 @@ public static class BootstrapCommand
             previousThroughput = throughput;
         }
 
+        progress.Stage(context.Has("--generate-only") ? "review" : "verify", targets.Length,
+            detail: context.Has("--generate-only") ? "Finalizing proposals" : "Running isolated tests");
         for (var i = 0; i < targets.Length; i++)
         {
             context.CancellationToken.ThrowIfCancellationRequested();
@@ -195,7 +207,7 @@ public static class BootstrapCommand
                 succeeded++;
                 AppendRow(text, target, (string?)restored["generation"] ?? "ok",
                     (string?)restored["execution"] ?? "not-run", (string?)restored["proposal"]);
-                ReportProgress(context, i + 1, targets.Length, target, "resumed", clock.Elapsed);
+                progress.Update(i + 1, $"Restored {target}", failed, skipped);
                 ProgressEvent(context, "resumed", targets.Length, i + 1, target, "ok", clock.Elapsed);
                 continue;
             }
@@ -206,7 +218,7 @@ public static class BootstrapCommand
             var error = item.Error;
             if (generation == "ok" && proposal is not null && !context.Has("--generate-only"))
             {
-                ReportProgress(context, i, targets.Length, target, "running", clock.Elapsed);
+                progress.Pulse($"Testing {target}", 1);
                 try
                 {
                     using var runOutput = new StringWriter(CultureInfo.InvariantCulture);
@@ -244,14 +256,15 @@ public static class BootstrapCommand
             AppendRow(text, target, generation, execution, proposal);
             // Keep pending results for all other methods when execution is interrupted.
             SaveState();
-            ReportProgress(context, i + 1, targets.Length, target, "complete", clock.Elapsed);
+            progress.Update(i + 1, target, failed, skipped);
             ProgressEvent(context, "finalized", targets.Length, i + 1, target, generation == "ok" && execution is "passed" or "not-run" ? "ok" : "failed", clock.Elapsed);
         }
 
         if (targets.Length == 0)
-            context.Output.Stderr.WriteLine("No eligible C# methods discovered.");
+            progress.Note("No eligible C# methods discovered.");
         text.Append(CultureInfo.InvariantCulture, $"\n{targets.Length} targets; {succeeded} successful, {failed} failed, {skipped} skipped. Proposals remain outside the repository; nothing was applied.\n");
         ProgressEvent(context, "finished", targets.Length, targets.Length, null, failed == 0 ? "ok" : "failed", clock.Elapsed);
+        progress.Finish(targets.Length, failed, skipped, $"{succeeded} successful");
         context.Output.Result("bootstrap", new JsonObject
         {
             ["schema"] = "testwizz.bootstrap/v1",
@@ -382,29 +395,4 @@ public static class BootstrapCommand
         return options;
     }
 
-    // Match the 24-column, equals-filled stage bars used by DocWizz; keep CI logs free of control codes.
-    private static void ReportProgress(CommandContext context, int completed, int total, string target, string phase, TimeSpan elapsed)
-    {
-        const int width = 24;
-        var percent = total == 0 ? 100 : completed * 100 / total;
-        var filled = percent * width / 100;
-        var bar = new string('=', filled) + new string('-', width - filled);
-        var duration = elapsed.TotalHours >= 1
-            ? elapsed.ToString(@"h\:mm\:ss", CultureInfo.InvariantCulture)
-            : elapsed.ToString(@"m\:ss", CultureInfo.InvariantCulture);
-        var writer = context.Output.Stderr;
-        var line = $"testwizz [{bar}] {percent,3}% ({completed}/{total}) {phase}: {target} ({duration})";
-        if (ReferenceEquals(writer, Console.Error) && !Console.IsErrorRedirected
-            && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CI"))
-            && Environment.GetEnvironmentVariable("TERM") != "dumb")
-        {
-            var maxWidth = Math.Max(20, Console.WindowWidth - 1);
-            writer.Write("\r" + (line.Length > maxWidth ? line[..maxWidth] : line).PadRight(maxWidth));
-            if (completed == total) writer.WriteLine();
-        }
-        else if (phase is "complete" or "resumed")
-        {
-            writer.WriteLine(line);
-        }
-    }
 }

@@ -87,6 +87,8 @@ public static class JourneyDraftBatch
             parsedUrl.AbsolutePath.StartsWith("//", StringComparison.Ordinal)))
             throw new CliException("journey_draft.invalid_url", "Only HTTP loopback URLs without credentials, query or fragment are supported.");
 
+        using var progress = BatchProgress.For(context, "journey-draft");
+        progress.Stage("ado", 0, detail: $"Loading plan {planId}");
         var root = context.PathArgument();
         var config = ConfigCommand.Load(Path.Combine(root, TestWizzConfig.FileName));
         var output = context.Options.GetValueOrDefault("--out") is { } dir
@@ -104,6 +106,7 @@ public static class JourneyDraftBatch
         var traceJson = RunAdo(root, context.CancellationToken, "testplan", "trace-export",
             planId.ToString(CultureInfo.InvariantCulture), "--area", area);
         var selection = Select(planJson, traceJson, planId);
+        progress.Stage("snapshot", 0, detail: "Preparing browser and local model");
 
         Directory.CreateDirectory(output);
         // Unique, external evidence folder: do not silently overwrite a previous plan snapshot.
@@ -158,6 +161,11 @@ public static class JourneyDraftBatch
             .Append(" test cases, ").Append(selection.Links.Count).Append(" explicit links.\n");
         var pairs = selection.Links.GroupBy(link => link.TestCaseId)
             .ToDictionary(g => g.Key, g => g.ToArray());
+        var totalUnits = selection.Links.Count +
+            selection.CaseIds.Count(id => !pairs.ContainsKey(id));
+        var processed = 0;
+        progress.Stage(listOnly ? "list" : "draft", totalUnits,
+            detail: $"{selection.Links.Count} explicit ADO links");
 
         foreach (var caseId in selection.CaseIds)
         {
@@ -178,6 +186,7 @@ public static class JourneyDraftBatch
                     Save();
                 }
                 log.Append("  skipped case ").Append(caseId).Append(": no explicit ADO Tested By link\n");
+                progress.Update(++processed, $"Case {caseId}: no link", failed, skipped);
                 continue;
             }
 
@@ -188,6 +197,7 @@ public static class JourneyDraftBatch
                 {
                     items.Add(new JsonObject { ["testCaseId"] = caseId, ["workItemId"] = link.WorkItemId,
                         ["status"] = "linked" });
+                    progress.Update(++processed, $"Case {caseId} · WI {link.WorkItemId}", failed, skipped);
                     continue;
                 }
 
@@ -217,8 +227,8 @@ public static class JourneyDraftBatch
                             });
                             log.Append("  resumed WI ").Append(link.WorkItemId)
                                 .Append(" / case ").Append(caseId).Append('\n');
-                            context.Output.Stderr.WriteLine("testwizz journey-draft: resumed WI " +
-                                link.WorkItemId + " / case " + caseId);
+                            progress.Update(++processed, $"Reused case {caseId} · WI {link.WorkItemId}",
+                                failed, skipped);
                             continue;
                         }
                     }
@@ -232,17 +242,15 @@ public static class JourneyDraftBatch
                             ["testCaseId"] = caseId, ["workItemId"] = link.WorkItemId,
                             ["status"] = "failed", ["reason"] = ex.Code,
                         });
-                        // Preserve the verified previous row: a temporary ADO outage is
-                        // not evidence that its artifact became stale. Retry validation
-                        // on the next --resume without regenerating it prematurely.
+                        // Preserve the verified previous row across a temporary ADO outage.
+                        progress.Update(++processed, $"ADO unavailable: case {caseId}", failed, skipped);
                         continue;
                     }
                 }
 
                 // Call the existing, validated one-case command in-process. It never executes
                 // browser actions and guarantees schema/step order before saving a draft.
-                context.Output.Stderr.WriteLine("testwizz journey-draft: preparing WI " +
-                    link.WorkItemId + " / case " + caseId);
+                progress.Pulse($"Drafting case {caseId} · WI {link.WorkItemId}", active: 1);
                 using var writer = new StringWriter(CultureInfo.InvariantCulture);
                 var options = new Dictionary<string, string?>(StringComparer.Ordinal)
                 {
@@ -321,9 +329,11 @@ public static class JourneyDraftBatch
                     };
                     Save();
                 }
+                progress.Update(++processed, $"Case {caseId} · WI {link.WorkItemId}", failed, skipped);
             }
         }
 
+        progress.Finish(processed, failed, skipped, $"{drafted} drafted · {resumed} resumed");
         log.Append("Summary: ").Append(drafted).Append(" drafted, ")
             .Append(skipped).Append(" skipped, ").Append(failed).Append(" failed. ")
             .Append("Review required; nothing executed or applied.\n");
