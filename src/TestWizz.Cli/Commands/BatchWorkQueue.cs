@@ -78,4 +78,96 @@ internal static class BatchWorkQueue
 
         return new Summary(processed, next, stopped);
     }
+
+    /// <summary>
+    /// Two bounded stages that overlap: an item enters the second stage as soon as its first stage completes
+    /// (and <paramref name="firstCompleted"/> asks for it), while other items are still in the first stage.
+    /// <paramref name="secondOnly"/> items skip the first stage. Every callback runs on this one coordinator,
+    /// one at a time, so callbacks can safely mutate shared state and persist checkpoints. Second-stage items
+    /// start in the order they became ready.
+    /// </summary>
+    public static async Task RunPipelineAsync<TItem, TFirst, TSecond>(
+        IReadOnlyList<TItem> items,
+        IReadOnlyList<TItem> secondOnly,
+        int maxFirst,
+        Func<TItem, CancellationToken, Task<TFirst>> first,
+        Func<TItem, TFirst, int, bool> firstCompleted,
+        int maxSecond,
+        Func<TItem, CancellationToken, Task<TSecond>> second,
+        Action<TItem, TSecond, int> secondCompleted,
+        Action<int, int>? heartbeat,
+        CancellationToken cancellationToken,
+        Func<int>? desiredFirst = null)
+    {
+        if (maxFirst < 1 || maxFirst > 8)
+            throw new ArgumentOutOfRangeException(nameof(maxFirst));
+        if (maxSecond < 1 || maxSecond > 8)
+            throw new ArgumentOutOfRangeException(nameof(maxSecond));
+
+        var firstActive = new List<Task<(TItem Item, TFirst Result)>>();
+        var secondActive = new List<Task<(TItem Item, TSecond Result)>>();
+        var ready = new Queue<TItem>(secondOnly);
+        var next = 0;
+
+        void Fill()
+        {
+            var slots = Math.Clamp(desiredFirst?.Invoke() ?? maxFirst, 1, maxFirst);
+            while (next < items.Count && firstActive.Count < slots)
+            {
+                var item = items[next++];
+                firstActive.Add(Task.Run(async () => (item, await first(item, cancellationToken).ConfigureAwait(false)), cancellationToken));
+            }
+
+            while (ready.Count > 0 && secondActive.Count < maxSecond)
+            {
+                var item = ready.Dequeue();
+                secondActive.Add(Task.Run(async () => (item, await second(item, cancellationToken).ConfigureAwait(false)), cancellationToken));
+            }
+        }
+
+        try
+        {
+            Fill();
+            while (firstActive.Count + secondActive.Count > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var selection = Task.WhenAny([.. firstActive.Cast<Task>(), .. secondActive]);
+                using var interval = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                var beat = Task.Delay(TimeSpan.FromSeconds(15), interval.Token);
+                var signal = await Task.WhenAny(selection, beat).ConfigureAwait(false);
+                if (signal == beat)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    heartbeat?.Invoke(firstActive.Count, secondActive.Count);
+                    continue;
+                }
+
+                interval.Cancel();
+                var finished = await selection.ConfigureAwait(false);
+                // Checkpoint before starting replacements so a crash preserves progress.
+                if (finished is Task<(TItem Item, TFirst Result)> generated && firstActive.Remove(generated))
+                {
+                    var (item, result) = await generated.ConfigureAwait(false);
+                    if (firstCompleted(item, result, firstActive.Count))
+                        ready.Enqueue(item);
+                }
+                else
+                {
+                    var verified = (Task<(TItem Item, TSecond Result)>)finished;
+                    secondActive.Remove(verified);
+                    var (item, result) = await verified.ConfigureAwait(false);
+                    secondCompleted(item, result, secondActive.Count);
+                }
+
+                Fill();
+            }
+        }
+        catch
+        {
+            // Never abandon in-flight model requests or container teardown; drain, then keep the original error.
+            try { await Task.WhenAll([.. firstActive.Cast<Task>(), .. secondActive]).ConfigureAwait(false); }
+            catch (Exception) { /* The original error has priority. */ }
+            throw;
+        }
+    }
 }

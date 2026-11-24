@@ -130,6 +130,9 @@ public sealed class RepairLoopTests : IAsyncLifetime
         Assert.Equal("passed", (string)json["result"]!["status"]!);
         Assert.Equal(1, (int)json["result"]!["repair"]!["accepted"]!);
         Assert.Equal(2, _builds);
+        // The repair attempt reuses the first attempt's restore: one restore container for two builds.
+        Assert.Single(_runtime.Runs, r => FakeRuntime.Phase(r.Spec) == "restore");
+        Assert.True((bool)json["result"]!["phases"]![0]!["reused"]!);
         Assert.Equal(CannedTests.Divide + "\n", File.ReadAllText(Path.Combine(bundle, "files", "tests", "Shop.Tests", "CalculatorDivideTests.cs")));
         Assert.Contains("\"2\"", File.ReadAllText(Path.Combine(bundle, "attempts", "1", "tests", "Shop.Tests", "CalculatorDivideTests.cs")), StringComparison.Ordinal);
         Assert.Empty(ProposalReader.Load(bundle).Edited);

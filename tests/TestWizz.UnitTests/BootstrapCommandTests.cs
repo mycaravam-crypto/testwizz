@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Http;
 using TestWizz.Cli;
+using TestWizz.Core.Running;
 
 namespace TestWizz.UnitTests;
 
@@ -313,6 +314,77 @@ public sealed class BootstrapCommandTests : IAsyncLifetime
         {
             TestTempDirectories.Delete(other);
         }
+    }
+
+    [Fact]
+    public void Verification_OverlapsGenerationAndTargetsShareOneRestore()
+    {
+        Write("src/App/Maths.cs", "namespace App;\n\npublic class Maths\n{\n    public int One() => 1;\n\n    public int Two() => 2;\n}\n");
+        // The SDK image for the containers follows the test project's target framework.
+        var project = Path.Combine(_repo, "tests", "App.Tests", "App.Tests.csproj");
+        File.WriteAllText(project, File.ReadAllText(project).Replace("<ItemGroup>",
+            "<PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>\n  <ItemGroup>", StringComparison.Ordinal));
+        const string validTwo = """
+            namespace App.Tests;
+
+            public class MathsTests
+            {
+                [Fact]
+                [Trait("Scenario", "S1")]
+                public void Two_ReturnsTwo()
+                {
+                    Assert.Equal(2, new Maths().Two());
+                }
+            }
+            """;
+        using var containerStarted = new ManualResetEventSlim();
+        var runtime = new FakeRuntime
+        {
+            Respond = spec =>
+            {
+                containerStarted.Set();
+                if (FakeRuntime.Phase(spec) == "test")
+                    FakeRuntime.WriteTrx(spec, $"""<?xml version="1.0" encoding="utf-8"?><TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><Results><UnitTestResult testId="a" testName="App.Tests.MathsTests.One_ReturnsOne" duration="00:00:00.01" outcome="Passed" /><UnitTestResult testId="b" testName="App.Tests.MathsTests.Two_ReturnsTwo" duration="00:00:00.01" outcome="Passed" /></Results><TestDefinitions><UnitTest name="App.Tests.MathsTests.One_ReturnsOne" id="a"><TestMethod className="App.Tests.MathsTests" name="One_ReturnsOne" /></UnitTest><UnitTest name="App.Tests.MathsTests.Two_ReturnsTwo" id="b"><TestMethod className="App.Tests.MathsTests" name="Two_ReturnsTwo" /></UnitTest></TestDefinitions></TestRun>""");
+                return new ContainerResult(0, "ok", TimeSpan.Zero, false);
+            },
+        };
+        var overlapped = false;
+        _server.AsOllama("m", Reply(ValidTests));
+        _server.On("POST /api/chat", async http =>
+        {
+            var index = Interlocked.Increment(ref _chatRequests) - 1;
+            // The second target's model response waits until the first target's verification has started a
+            // container. Without overlapping stages this would only time out.
+            if (index == 1) overlapped = await Task.Run(() => containerStarted.Wait(TimeSpan.FromSeconds(20)), http.RequestAborted);
+            http.Response.ContentType = "application/json";
+            await http.Response.WriteAsync(new JsonObject
+            {
+                ["message"] = new JsonObject { ["role"] = "assistant", ["content"] = Reply(index == 0 ? ValidTests : validTwo) },
+            }.ToJsonString(), http.RequestAborted);
+        });
+
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+        var exit = new CliApp(stdout, stderr, _repo, name => name == "TESTWIZZ_RETRY_DELAY_MS" ? "0" : null, _ => runtime)
+            .Run(["bootstrap", "--all", "--max-workers", "1", "--progress-jsonl", "--format", "json"], TestContext.Current.CancellationToken);
+
+        Assert.True(exit == ExitCodes.Success, stdout.ToString() + stderr);
+        Assert.True(overlapped);
+        var result = JsonNode.Parse(stdout.ToString())!["result"]!;
+        Assert.Equal(2, (int)result["execution"]!["passed"]!);
+        // One restore for both targets; each still builds and tests in its own workspace.
+        Assert.Equal(["restore", "build", "test", "build", "test"], runtime.Runs.Select(r => FakeRuntime.Phase(r.Spec)));
+        Assert.Equal(2, runtime.Runs.Select(r => r.Spec.Workspace).Skip(1).Distinct().Count());
+        // Generation and verification events interleave; each phase's own counter still only grows.
+        var events = Events(stderr.ToString()).ToList();
+        foreach (var phase in new[] { "generated", "finalized" })
+        {
+            var completed = events.Where(e => (string?)e["phase"] == phase).Select(e => (int)e["completed"]!).ToList();
+            Assert.Equal([1, 2], completed);
+        }
+
+        var items = JsonNode.Parse(File.ReadAllText(Checkpoint))!["items"]!.AsArray();
+        Assert.All(items, row => Assert.Equal("passed", (string?)row!["execution"]));
     }
 
     [Fact]

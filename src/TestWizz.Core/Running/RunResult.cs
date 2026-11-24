@@ -22,7 +22,11 @@ public enum RunStatus
 }
 
 /// <param name="Name">Phase name: <c>restore</c>, <c>build</c> or <c>test</c>.</param>
-public sealed record RunPhase(string Name, bool Network, int ExitCode, long DurationMs, bool TimedOut);
+/// <param name="Reused">
+/// No container ran: an identical restore (same restore files, test project and image) earlier in this batch or
+/// repair loop was reused. The exit code is that restore's.
+/// </param>
+public sealed record RunPhase(string Name, bool Network, int ExitCode, long DurationMs, bool TimedOut, bool Reused = false);
 
 /// <param name="InProposal">The error is in a file the proposal adds, as opposed to existing repository code.</param>
 public sealed record CompileError(string File, int Line, int Column, string Code, string Message, bool InProposal);
@@ -91,6 +95,7 @@ public static class RunJson
             ["exitCode"] = p.ExitCode,
             ["durationMs"] = p.DurationMs,
             ["timedOut"] = p.TimedOut,
+            ["reused"] = p.Reused,
         })]),
         ["compileErrors"] = new JsonArray([.. r.CompileErrors.Select(e => (JsonNode)new JsonObject
         {

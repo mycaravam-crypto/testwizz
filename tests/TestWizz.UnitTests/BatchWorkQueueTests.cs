@@ -207,3 +207,153 @@ public sealed class BatchWorkQueueTests
         }
     }
 }
+
+public sealed class BatchPipelineTests
+{
+    [Fact]
+    public async Task SecondStageStartsWhileFirstStageIsStillRunning()
+    {
+        // Item 1's first stage only finishes once item 0's second stage has started. Without overlap this deadlocks.
+        var secondStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var order = new ConcurrentQueue<string>();
+
+        var run = BatchWorkQueue.RunPipelineAsync<int, int, int>(
+            [0, 1],
+            [],
+            1,
+            async (item, _) =>
+            {
+                if (item == 1) await secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+                order.Enqueue($"first {item}");
+                return item;
+            },
+            (_, _, _) => true,
+            1,
+            (item, _) =>
+            {
+                order.Enqueue($"second {item}");
+                secondStarted.TrySetResult();
+                return Task.FromResult(item);
+            },
+            (_, _, _) => { },
+            null,
+            TestContext.Current.CancellationToken);
+
+        await run.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
+        Assert.Equal(["first 0", "second 0", "first 1", "second 1"], order);
+    }
+
+    [Fact]
+    public async Task CallbacksNeverOverlapAndEveryItemIsProcessedOnce()
+    {
+        var inCallback = 0;
+        var overlapped = false;
+        var firstDone = new ConcurrentBag<int>();
+        var secondDone = new List<int>();
+        void Enter()
+        {
+            if (Interlocked.Increment(ref inCallback) > 1) overlapped = true;
+            Thread.Sleep(1);
+        }
+
+        await BatchWorkQueue.RunPipelineAsync<int, int, int>(
+            [.. Enumerable.Range(0, 40)],
+            [100, 101],
+            4,
+            async (item, ct) => { await Task.Delay(item % 5, ct); return item; },
+            (item, _, _) => { Enter(); firstDone.Add(item); Interlocked.Decrement(ref inCallback); return item % 3 != 0; },
+            3,
+            async (item, ct) => { await Task.Delay(item % 7, ct); return item; },
+            (item, _, _) => { Enter(); secondDone.Add(item); Interlocked.Decrement(ref inCallback); },
+            null,
+            TestContext.Current.CancellationToken);
+
+        Assert.False(overlapped);
+        Assert.Equal(Enumerable.Range(0, 40), firstDone.Order());
+        // Only items the first-stage callback accepted, plus the second-stage-only items, reach the second stage.
+        Assert.Equal([.. Enumerable.Range(0, 40).Where(i => i % 3 != 0), 100, 101], secondDone.Order());
+    }
+
+    [Fact]
+    public async Task SecondStageRespectsItsOwnLimit()
+    {
+        var active = 0;
+        var peak = 0;
+
+        await BatchWorkQueue.RunPipelineAsync<int, int, int>(
+            [.. Enumerable.Range(0, 12)],
+            [],
+            4,
+            (item, _) => Task.FromResult(item),
+            (_, _, _) => true,
+            2,
+            async (item, ct) =>
+            {
+                var now = Interlocked.Increment(ref active);
+                InterlockedMax(ref peak, now);
+                await Task.Delay(5, ct);
+                Interlocked.Decrement(ref active);
+                return item;
+            },
+            (_, _, _) => { },
+            null,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, peak);
+    }
+
+    [Fact]
+    public async Task FailureDrainsBothStagesAndKeepsTheOriginalError()
+    {
+        var verifying = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var verified = 0;
+
+        var run = BatchWorkQueue.RunPipelineAsync<int, int, int>(
+            [0, 1],
+            [],
+            1,
+            async (item, _) =>
+            {
+                if (item == 1)
+                {
+                    await verifying.Task;
+                    throw new InvalidOperationException("model failed");
+                }
+
+                return item;
+            },
+            (_, _, _) => true,
+            1,
+            async (item, _) =>
+            {
+                verifying.TrySetResult();
+                await release.Task;
+                Interlocked.Increment(ref verified);
+                return item;
+            },
+            (_, _, _) => { },
+            null,
+            TestContext.Current.CancellationToken);
+
+        await verifying.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+        Assert.False(run.IsCompleted);
+        release.SetResult();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => run);
+        Assert.Equal("model failed", error.Message);
+        // The running verification (container teardown in real use) finished before the error surfaced.
+        Assert.Equal(1, verified);
+    }
+
+    private static void InterlockedMax(ref int destination, int value)
+    {
+        int previous;
+        do
+        {
+            previous = destination;
+            if (value <= previous) return;
+        } while (Interlocked.CompareExchange(ref destination, value, previous) != previous);
+    }
+}

@@ -77,7 +77,9 @@ public static class RunCommand
             var image = context.Options.TryGetValue(ImageOption, out var imageText) && !string.IsNullOrWhiteSpace(imageText) ? imageText : null;
             var repair = !context.Has(NoRepairOption) && config.Run.MaxRepairAttempts > 0;
             Func<ModelClient>? clientFactory = repair ? () => ModelClient.Create(config.Ai, context.GetEnvironmentVariable) : null;
-            loop = new RepairLoop(new DotNetTestRunner(runtime), clientFactory, config.Run.MaxRepairAttempts)
+            // Repair attempts (and, in a batch, other targets) reuse one restore when its inputs are identical.
+            using var ownCache = context.SharedRestoreCache is null ? new RestoreCache() : null;
+            loop = new RepairLoop(new DotNetTestRunner(runtime, context.SharedRestoreCache ?? ownCache), clientFactory, config.Run.MaxRepairAttempts)
                 .RunAsync(root, proposal.Directory, new RunOptions(image, TimeSpan.FromSeconds(timeoutSeconds), ContainerLimits.Default), context.CancellationToken)
                 .GetAwaiter().GetResult();
             proposal = ProposalReader.Load(proposal.Directory);
@@ -123,7 +125,7 @@ public static class RunCommand
         text.Append(CultureInfo.InvariantCulture, $"Run of {r.ProposalId} in {r.Runtime} ({r.Image})\n");
         foreach (var phase in r.Phases)
         {
-            text.Append(CultureInfo.InvariantCulture, $"  {phase.Name,-8} network {(phase.Network ? "on " : "off")}  exit {phase.ExitCode,3}  {phase.DurationMs / 1000.0:0.0}s{(phase.TimedOut ? "  TIMED OUT" : "")}\n");
+            text.Append(CultureInfo.InvariantCulture, $"  {phase.Name,-8} network {(phase.Network ? "on " : "off")}  exit {phase.ExitCode,3}  {phase.DurationMs / 1000.0:0.0}s{(phase.Reused ? "  reused" : "")}{(phase.TimedOut ? "  TIMED OUT" : "")}\n");
         }
 
         foreach (var stale in r.StaleSources)
