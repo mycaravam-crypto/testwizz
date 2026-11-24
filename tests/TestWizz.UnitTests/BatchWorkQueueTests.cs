@@ -35,12 +35,14 @@ public sealed class BatchWorkQueueTests
         var initial = await Task.WhenAny(
             Task.Run(async () =>
             {
-                while (started.Count < 2) await Task.Delay(10);
-            }), Task.Delay(5000));
+                while (started.Count < 2)
+                    await Task.Delay(10, TestContext.Current.CancellationToken);
+            }, TestContext.Current.CancellationToken),
+            Task.Delay(5000, TestContext.Current.CancellationToken));
         Assert.Equal(2, started.Count);
         Assert.DoesNotContain(2, started);
         fast.SetResult(1);
-        var next = await Task.WhenAny(startedThird.Task, Task.Delay(5000));
+        var next = await Task.WhenAny(startedThird.Task, Task.Delay(5000, TestContext.Current.CancellationToken));
         Assert.Same(startedThird.Task, next);
         Assert.False(slow.Task.IsCompleted);
         slow.SetResult(0);
@@ -97,7 +99,7 @@ public sealed class BatchWorkQueueTests
             result => result < 0,
             null,
             TestContext.Current.CancellationToken);
-        var early = await Task.WhenAny(run, Task.Delay(150));
+        var early = await Task.WhenAny(run, Task.Delay(150, TestContext.Current.CancellationToken));
         Assert.Equal(2, started.Count);
         Assert.False(run.IsCompleted);
         slow.SetResult(1);
