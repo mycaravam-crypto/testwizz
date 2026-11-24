@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using System.Security.Cryptography;
 using TestWizz.Core.Configuration;
 using TestWizz.Core.Proposals;
+using TestWizz.Core.Running;
 using TestWizz.DotNet;
 using TestWizz.AI;
 
@@ -17,7 +18,7 @@ public static class BootstrapCommand
     public static CommandDefinition Definition { get; } = new(
         "bootstrap",
         "Discover all eligible C# methods, generate test proposals and optionally run them in isolated containers. Never applies changes.",
-        "testwizz bootstrap [path] --all [--review] [--generate-only] [--resume] [--max-workers <n>] [--out <dir>]",
+        "testwizz bootstrap [path] --all [--review] [--generate-only] [--resume] [--max-workers <n>] [--verify-workers <n>] [--out <dir>]",
         Options:
         [
             new("--all", "Discover and process all eligible C# methods."),
@@ -26,7 +27,8 @@ public static class BootstrapCommand
             new("--resume", "Resume matching sources; reuse completed and generated-but-not-yet-tested proposals."),
             new("--out", "Proposal directory outside the repository.", "dir"),
             new("--debug", "Print each generated test source to stderr (may contain sensitive source code)."),
-            new("--max-workers", "Maximum adaptive generation workers (1-8; default 4).", "n"),
+            new("--max-workers", "Maximum concurrent model requests (1-8; default 4).", "n"),
+            new("--verify-workers", "Maximum parallel isolated container test runs (1-4; default 1).", "n"),
             new("--progress-jsonl", "Emit structured bootstrap progress events on stderr."),
         ],
         MaxArguments: 1,
@@ -41,6 +43,11 @@ public static class BootstrapCommand
         if (context.Options.TryGetValue("--max-workers", out var workerText)
             && (!int.TryParse(workerText, NumberStyles.None, CultureInfo.InvariantCulture, out maxWorkers) || maxWorkers is < 1 or > 8))
             throw new CliException("usage", "--max-workers must be between 1 and 8.");
+        var verifyWorkers = 1;
+        if (context.Options.TryGetValue("--verify-workers", out var verifyText) &&
+            (!int.TryParse(verifyText, NumberStyles.None, CultureInfo.InvariantCulture, out verifyWorkers) ||
+             verifyWorkers is < 1 or > 4))
+            throw new CliException("usage", "--verify-workers must be between 1 and 4.");
         if (!context.Has("--all"))
             throw new CliException("usage", "bootstrap currently requires --all.");
         var root = context.PathArgument();
@@ -129,37 +136,20 @@ public static class BootstrapCommand
         ProgressEvent(context, "discovered", targets.Length, completed.Count, null, null, clock.Elapsed);
         var pending = targets.Where(target => !valid.ContainsKey(target)).ToArray();
         var generatedResults = new Dictionary<string, BootstrapItem>(recovered, StringComparer.Ordinal);
-        var workers = 1;
-        double previousThroughput = 0;
-        var position = 0;
-        // Run model generation in bounded waves. Only the coordinator writes checkpoints
-        // and executes containers, avoiding concurrent checkpoint changes and test-environment collisions.
-        while (position < pending.Length)
-        {
-            context.CancellationToken.ThrowIfCancellationRequested();
-            var batch = pending.Skip(position).Take(workers).ToArray();
-            var waveClock = Stopwatch.StartNew();
-            ProgressEvent(context, "generation-started", targets.Length, completed.Count + position, batch[0], null, clock.Elapsed);
-            progress.Update(valid.Count + position, batch[0], active: batch.Length);
-
-            var tasks = batch.Select(target => Task.Run(() => GenerateTarget(context, provider, model, target),
-                context.CancellationToken)).ToList();
-            var remaining = new List<Task<BootstrapItem>>(tasks);
-            while (remaining.Count > 0)
+        // Full worker utilization from the first target, with no head-of-line blocking
+        // when one inference is slower than the rest. Only the coordinator writes state.
+        var preparationSeconds = clock.Elapsed.TotalSeconds;
+        var generationClock = Stopwatch.StartNew();
+        var generatedCount = 0;
+        if (pending.Length > 0)
+            ProgressEvent(context, "generation-started", targets.Length, completed.Count,
+                pending[0], null, clock.Elapsed);
+        BatchWorkQueue.RunAsync(
+            pending,
+            maxWorkers,
+            (target, _) => Task.FromResult(GenerateTarget(context, provider, model, target)),
+            (target, item, active) =>
             {
-                context.CancellationToken.ThrowIfCancellationRequested();
-                var completion = Task.WhenAny(remaining);
-                // Wait at most 15 seconds between heartbeat messages even when an LLM is slow.
-                var heartbeat = Task.Delay(TimeSpan.FromSeconds(15), context.CancellationToken);
-                var winner = Task.WhenAny(completion, heartbeat).GetAwaiter().GetResult();
-                if (winner == heartbeat)
-                {
-                    progress.Pulse($"Waiting for {remaining.Count} model request(s)", remaining.Count);
-                    continue;
-                }
-                var completedTask = completion.GetAwaiter().GetResult();
-                var item = completedTask.GetAwaiter().GetResult();
-                remaining.Remove(completedTask);
                 generatedResults[item.Target] = item;
                 var manifest = item.Proposal is null ? null
                     : BatchResume.ShaFile(Path.Combine(item.Proposal, ProposalBundle.ManifestFile));
@@ -173,44 +163,43 @@ public static class BootstrapCommand
                     ["artifactSha256"] = manifest,
                     ["error"] = item.Error,
                 };
-                // Persist each finished LLM request, even when container execution follows.
                 SaveState();
+                generatedCount++;
                 if (item.Diagnostics.Length > 0) progress.Diagnostics(item.Diagnostics);
-                var done = valid.Count + position + batch.Length - remaining.Count;
-                progress.Update(done, item.Target,
-                    failed: checkpointItems.Values.Count(row => (string?)row["generation"] is "failed" or "error"),
-                    active: remaining.Count);
-                ProgressEvent(context, "generated", targets.Length, done, item.Target, item.Generation, clock.Elapsed);
-
-            }
-            waveClock.Stop();
-            position += batch.Length;
-            var throughput = batch.Length / Math.Max(waveClock.Elapsed.TotalSeconds, 0.001);
-            progress.Pulse($"{throughput:F2} targets/s · up to {workers} workers");
-            if (workers > 1 && previousThroughput > 0 && throughput < previousThroughput * 0.9)
-                workers = Math.Max(1, workers - 1);
-            else if (workers < maxWorkers && position < pending.Length)
-                workers++;
-            previousThroughput = throughput;
-        }
+                var done = valid.Count + generatedCount;
+                var failureCount = checkpointItems.Values.Count(
+                    row => (string?)row["generation"] is "failed" or "error");
+                progress.Update(done, item.Target, failed: failureCount, active: active);
+                ProgressEvent(context, "generated", targets.Length, done, item.Target,
+                    item.Generation, clock.Elapsed);
+            },
+            null,
+            (done, active) => progress.Pulse($"Waiting for {active} model request(s)", active),
+            context.CancellationToken).GetAwaiter().GetResult();
+        generationClock.Stop();
+        if (pending.Length > 0)
+            progress.Pulse($"{generatedCount / Math.Max(0.001, generationClock.Elapsed.TotalSeconds):F2} targets/s · {maxWorkers} workers");
 
         progress.Stage(context.Has("--generate-only") ? "review" : "verify", targets.Length,
-            detail: context.Has("--generate-only") ? "Finalizing proposals" : "Running isolated tests");
-        for (var i = 0; i < targets.Length; i++)
+            completed.Count, context.Has("--generate-only")
+                ? "Finalizing proposals" : "Running isolated tests");
+
+        var remainingForVerification = targets.Where(target => !completed.ContainsKey(target)).ToArray();
+        // The runtime CLI can be expensive (Docker/Podman version performs a daemon handshake).
+        // Check once for this batch. Every test still gets a dedicated, disposable workspace
+        // and uniquely named containers; no shared writable test/build directories.
+        IContainerRuntime? checkedRuntime = null;
+        string? runtimeProblem = null;
+        if (!context.Has("--generate-only") && remainingForVerification.Any(target =>
+            generatedResults[target].Generation == "ok" && generatedResults[target].Proposal is not null))
         {
-            context.CancellationToken.ThrowIfCancellationRequested();
-            var target = targets[i];
-            if (completed.TryGetValue(target, out var previous))
-            {
-                var restored = previous.DeepClone().AsObject();
-                rows.Add(restored);
-                succeeded++;
-                AppendRow(text, target, (string?)restored["generation"] ?? "ok",
-                    (string?)restored["execution"] ?? "not-run", (string?)restored["proposal"]);
-                progress.Update(i + 1, $"Restored {target}", failed, skipped);
-                ProgressEvent(context, "resumed", targets.Length, i + 1, target, "ok", clock.Elapsed);
-                continue;
-            }
+            var candidate = context.Runtime(config.Run.Runtime);
+            runtimeProblem = candidate.CheckAsync(context.CancellationToken).GetAwaiter().GetResult();
+            if (runtimeProblem is null) checkedRuntime = candidate;
+        }
+
+        BootstrapVerified VerifyOne(string target)
+        {
             var item = generatedResults[target];
             var generation = item.Generation;
             var execution = "not-run";
@@ -218,46 +207,90 @@ public static class BootstrapCommand
             var error = item.Error;
             if (generation == "ok" && proposal is not null && !context.Has("--generate-only"))
             {
-                progress.Pulse($"Testing {target}", 1);
-                try
+                if (runtimeProblem is not null)
                 {
-                    using var runOutput = new StringWriter(CultureInfo.InvariantCulture);
-                    var runContext = context with
-                    {
-                        Command = RunCommand.Definition,
-                        Options = RunOptions(context, proposal),
-                        Output = new CliOutput(runOutput, context.Output.Stderr, OutputFormat.Json),
-                    };
-                    var runExit = RunCommand.Definition.Handler(runContext);
-                    execution = runExit == ExitCodes.Success ? "passed" : "failed";
-                }
-                catch (Exception ex) when (ex is CliException or InvalidOperationException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException)
-                {
-                    error = ex is CliException cli ? cli.Code + ": " + cli.Message : ex.Message;
+                    error = "run.no_container_runtime: " + runtimeProblem;
                     execution = "error";
+                }
+                else
+                {
+                    try
+                    {
+                        using var runOutput = new StringWriter(CultureInfo.InvariantCulture);
+                        var runContext = context with
+                        {
+                            Command = RunCommand.Definition,
+                            Options = RunOptions(context, proposal),
+                            Output = new CliOutput(runOutput, TextWriter.Null, OutputFormat.Json),
+                            SharedRuntime = checkedRuntime,
+                        };
+                        var runExit = RunCommand.Definition.Handler(runContext);
+                        execution = runExit == ExitCodes.Success ? "passed" : "failed";
+                    }
+                    catch (Exception ex) when (ex is CliException or InvalidOperationException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException)
+                    {
+                        error = ex is CliException cli ? cli.Code + ": " + cli.Message : ex.Message;
+                        execution = "error";
+                    }
                 }
             }
             else if (generation == "error") execution = "error";
+            return new BootstrapVerified(target, generation, execution, proposal, error);
+        }
 
-            if (generation == "ok" && (execution is "passed" or "not-run")) succeeded++;
-            else failed++;
-            var finalized = new JsonObject
+        var verifiedResults = new Dictionary<string, BootstrapVerified>(StringComparer.Ordinal);
+        var verificationClock = Stopwatch.StartNew();
+        BatchWorkQueue.RunAsync(
+            remainingForVerification,
+            verifyWorkers,
+            (target, _) => Task.FromResult(VerifyOne(target)),
+            (target, result, active) =>
             {
-                ["target"] = target,
-                ["generation"] = generation,
-                ["execution"] = execution,
-                ["proposal"] = proposal,
-                ["artifactSha256"] = proposal is null ? null
-                    : BatchResume.ShaFile(Path.Combine(proposal, ProposalBundle.ManifestFile)),
-                ["error"] = error,
-            };
-            rows.Add(finalized.DeepClone());
-            checkpointItems[target] = finalized;
-            AppendRow(text, target, generation, execution, proposal);
-            // Keep pending results for all other methods when execution is interrupted.
-            SaveState();
-            progress.Update(i + 1, target, failed, skipped);
-            ProgressEvent(context, "finalized", targets.Length, i + 1, target, generation == "ok" && execution is "passed" or "not-run" ? "ok" : "failed", clock.Elapsed);
+                verifiedResults[target] = result;
+                var finalized = new JsonObject
+                {
+                    ["target"] = target,
+                    ["generation"] = result.Generation,
+                    ["execution"] = result.Execution,
+                    ["proposal"] = result.Proposal,
+                    ["artifactSha256"] = result.Proposal is null ? null
+                        : BatchResume.ShaFile(Path.Combine(result.Proposal, ProposalBundle.ManifestFile)),
+                    ["error"] = result.Error,
+                };
+                checkpointItems[target] = finalized;
+                // Only the coordinator writes checkpoints, even when containers run in parallel.
+                SaveState();
+                var failures = verifiedResults.Values.Count(row => row.Generation != "ok" ||
+                    row.Execution is not ("passed" or "not-run"));
+                var done = completed.Count + verifiedResults.Count;
+                progress.Update(done, target, failed: failures, active: active);
+                ProgressEvent(context, "finalized", targets.Length, done, target,
+                    result.Generation == "ok" && result.Execution is "passed" or "not-run" ? "ok" : "failed",
+                    clock.Elapsed);
+            },
+            null,
+            (done, active) => progress.Pulse($"Waiting for {active} isolated test run(s)", active),
+            context.CancellationToken).GetAwaiter().GetResult();
+        verificationClock.Stop();
+
+        // Aggregate in source order, independent of concurrent completion order.
+        foreach (var target in targets)
+        {
+            if (completed.TryGetValue(target, out var previous))
+            {
+                var restored = previous.DeepClone().AsObject();
+                rows.Add(restored);
+                succeeded++;
+                AppendRow(text, target, (string?)restored["generation"] ?? "ok",
+                    (string?)restored["execution"] ?? "not-run", (string?)restored["proposal"]);
+                ProgressEvent(context, "resumed", targets.Length, completed.Count, target, "ok", clock.Elapsed);
+                continue;
+            }
+            var result = verifiedResults[target];
+            if (result.Generation == "ok" && result.Execution is "passed" or "not-run") succeeded++;
+            else failed++;
+            rows.Add(checkpointItems[target].DeepClone());
+            AppendRow(text, target, result.Generation, result.Execution, result.Proposal);
         }
 
         if (targets.Length == 0)
@@ -272,6 +305,14 @@ public static class BootstrapCommand
             ["eligible"] = targets.Length,
             ["resumed"] = completed.Count,
             ["generationWorkersMax"] = maxWorkers,
+            ["verificationWorkersMax"] = verifyWorkers,
+            ["timings"] = new JsonObject
+            {
+                ["preparationSeconds"] = Math.Round(preparationSeconds, 1),
+                ["generationSeconds"] = Math.Round(generationClock.Elapsed.TotalSeconds, 1),
+                ["verificationSeconds"] = Math.Round(verificationClock.Elapsed.TotalSeconds, 1),
+                ["totalSeconds"] = Math.Round(clock.Elapsed.TotalSeconds, 1),
+            },
             ["succeeded"] = succeeded,
             ["failed"] = failed,
             ["skipped"] = skipped,
@@ -326,6 +367,7 @@ public static class BootstrapCommand
     }
 
     private sealed record BootstrapItem(string Target, string Generation, string? Proposal, string? Error, string Diagnostics, double Seconds);
+    private sealed record BootstrapVerified(string Target, string Generation, string Execution, string? Proposal, string? Error);
 
     private static BootstrapItem GenerateTarget(CommandContext context, RoslynContextProvider provider, ModelClient model, string target)
     {

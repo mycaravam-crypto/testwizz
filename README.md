@@ -69,9 +69,10 @@ testwizz bootstrap . --all --generate-only --debug
 
 - `--max-workers N` (1-8, default 4) applies to `generate --all-changed`. Work starts at one request, ramps up when end-to-end throughput is acceptable, and backs off when throughput falls more than 10% relative to the preceding wave. The measured performance depends on the model, server, and target complexity; validate with representative benchmarks.
 - The changed-code batch loads one Roslyn context provider and one reusable model client instead of reloading these per target.
-- `bootstrap --all` uses adaptive concurrent generation with shared Roslyn and model clients; container test execution and checkpoint writes remain serialized.
+- `bootstrap --all` and `generate --all-changed` use bounded **work-conserving concurrency**: a completed request immediately frees a slot for the next target instead of waiting for the slowest request in a batch. Explicit `--max-workers 2` starts two model requests immediately; the setting is a concurrency limit, not guaranteed speedup on a single-GPU model. A shared model client queries model metadata at most once per batch.
+- `bootstrap --all --verify-workers 2` optionally verifies two proposals concurrently in **independent disposable Docker/Podman workspaces** (1-4 allowed, default 1). This never shares generated source, build outputs, or writable NuGet caches between containers. Runtime availability is checked once for the verification batch instead of once per proposal. Use 1 on memory-constrained machines. Checkpoints are still written sequentially by the coordinator after each completed proposal.
 - `--debug` prints proposed C# test files to stderr, preserving JSON stdout. Generated code may contain confidential repository details; only enable it in trusted terminals or controlled logs. Debug output is grouped by target in concurrent batches.
-- Per-target elapsed seconds and each wave's throughput are reported for performance diagnosis. Proposals are still review-first and are not automatically applied.
+- `bootstrap --format json` reports `timings.preparationSeconds`, `generationSeconds`, `verificationSeconds`, and `totalSeconds` to identify the real bottleneck. For an isolated comparison, use `bootstrap --all --generate-only` to skip containers. Docker builds still restore/build/test each proposal independently; this costs time but prevents contamination between runs. No repository files are applied automatically.
 - **Smart Resume**: All three generation batches (`bootstrap --all`, `generate --all-changed`, `journey-draft --plan-id`) save atomic external checkpoints **after every completed target**, including generated-but-not-yet-tested bootstrap proposals. Restart the same command with `--resume` and the same `--out`; intact outputs are reused without repeating successful LLM work. Failed/pending work is retried. Changed source code, project scope, ADO plan/links, UI snapshot or generation-relevant, non-secret model settings invalidate the relevant checkpoint. Changed input raises `bootstrap.changed` for Bootstrap or `resume.changed` for the other batches, instead of silently mixing runs. Checkpoint files: `bootstrap-checkpoint.json`, `generate-checkpoint.json`, `journey-draft-plan-<id>-checkpoint.json`. In-flight model requests cannot be resumed mid-token.
 
 ## Terminal progress
@@ -84,12 +85,13 @@ Redirected stderr, CI, and `TERM=dumb` produce plain, throttled milestone lines 
 
 ```bash
 testwizz bootstrap . --all --review              # discover, generate and run eligible C# methods
+testwizz bootstrap . --all --review --max-workers 2 --verify-workers 2  # overlap independent work
 testwizz bootstrap . --all --generate-only      # generate proposals without containers
 testwizz bootstrap . --all --format json        # one aggregate JSON object on stdout
 testwizz bootstrap . --all --review --max-workers 2 --resume  # resume the same scan
 ```
 
-Bootstrap discovers public/internal/protected-internal C# methods with bodies, using overload-safe documentation IDs; tests and ignored files are excluded. **Generation uses bounded adaptive parallel waves**; container execution and checkpoint writes remain serialized. Progress is written to stderr (optionally as `--progress-jsonl`), and per-target generation/run outcomes are recorded. Proposals stay **outside** the repository and are **not applied automatically**. Generation requires a configured local model; running requires Docker/Podman.
+Bootstrap discovers public/internal/protected-internal C# methods with bodies, using overload-safe documentation IDs; tests and ignored files are excluded. **Generation uses a bounded, continuously replenished worker pool**; independent container executions can also overlap when explicitly configured, while checkpoint writes remain serialized. Progress is written to stderr (optionally as `--progress-jsonl`), and per-target generation/run outcomes are recorded. Proposals stay **outside** the repository and are **not applied automatically**. Generation requires a configured local model; running requires Docker/Podman.
 
 **Bootstrap limitations:** C#/xUnit only; no Vue bootstrap, mid-request AI state recovery, or automatic application. `--resume` reuses verified completed targets and pending generated proposals from a matching checkpoint; failed executions are rerun without another model request. Target count is not a coverage guarantee; inferred expectations require review.
 

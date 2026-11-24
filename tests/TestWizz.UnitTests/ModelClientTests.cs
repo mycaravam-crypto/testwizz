@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Http;
 using System.Text.Json.Nodes;
 using TestWizz.AI;
 
@@ -21,6 +22,51 @@ public sealed class ModelClientTests : IAsyncLifetime
         AiCheck.RunAsync(settings, Env, new EndpointGuard(), TestContext.Current.CancellationToken);
 
     private static AiCheckStep Step(AiCheckReport report, string name) => report.Steps.Single(s => s.Name == name);
+
+    [Fact]
+    public async Task ConcurrentDigestLookups_AreCoalescedPerClient()
+    {
+        _server.AsOllama("qwen2.5-coder:14b", """{"answer":5}""");
+        using var client = ModelClient.Create(TestSettings.Ollama(_server.BaseUri), _ => null);
+        var lookups = Enumerable.Range(0, 20)
+            .Select(_ => client.ModelDigestAsync(TestContext.Current.CancellationToken));
+        var digests = await Task.WhenAll(lookups);
+        Assert.All(digests, value => Assert.Equal("sha256:abc123", value));
+        Assert.Single(_server.Requests.Where(request => request.Path == "/api/tags"));
+    }
+
+    [Fact]
+    public async Task FailedDigestLookup_IsRetried_NotCached()
+    {
+        var calls = 0;
+        _server.On("GET /api/tags", async context =>
+        {
+            if (Interlocked.Increment(ref calls) == 1)
+            {
+                context.Response.StatusCode = 503;
+                return;
+            }
+            context.Response.ContentType = "application/json";
+            await context.Response.WriteAsync("""
+                {"models":[{"name":"qwen2.5-coder:14b","digest":"sha256:new"}]}
+                """);
+        });
+        using var client = ModelClient.Create(TestSettings.Ollama(_server.BaseUri), _ => null);
+        await Assert.ThrowsAsync<ModelClientException>(() =>
+            client.ModelDigestAsync(TestContext.Current.CancellationToken));
+        Assert.Equal("sha256:new", await client.ModelDigestAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public async Task UnsupportedDigestListing_IsCachedAsNull()
+    {
+        _server.AsOpenAi("codestral", """{"answer":5}""").OnJson("GET /v1/models", "{}", status: 404);
+        using var client = ModelClient.Create(TestSettings.OpenAi(OpenAiBase), _ => null);
+        Assert.Null(await client.ModelDigestAsync(TestContext.Current.CancellationToken));
+        Assert.Null(await client.ModelDigestAsync(TestContext.Current.CancellationToken));
+        Assert.Single(_server.Requests.Where(request => request.Path == "/v1/models"));
+    }
 
     [Fact]
     public async Task Ollama_Success()

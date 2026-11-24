@@ -43,9 +43,9 @@ Legacy `testwizz.json` remains supported, but `testwizz.yaml` takes precedence. 
 ## Generate and apply C# tests
 
 ```bash
-testwizz bootstrap . --all --review --max-workers 2
+testwizz bootstrap . --all --review --max-workers 2 --verify-workers 2
 # If interrupted, use the same output path and execution mode:
-testwizz bootstrap . --all --review --max-workers 2 --resume
+testwizz bootstrap . --all --review --max-workers 2 --verify-workers 2 --resume
 testwizz apply . --all --verified-only
 git status --short
 dotnet test -c Release
@@ -53,7 +53,7 @@ dotnet test -c Release
 
 `bootstrap` generates C#/xUnit proposals and tests them in Docker/Podman; `--verified-only` copies only previously passing, unchanged proposals. Review added files before committing. Without a container, `bootstrap . --all --generate-only` makes **unverified** proposals instead. Use `bootstrap . --all --resume` to continue a scan with unchanged sources, configuration and scan mode. Both generated proposals and test outcomes are checkpointed; pending tests are rerun without regenerating their proposals. For changed-code batches, use `testwizz generate . --since main --all-changed --resume` after an initial run. Proposals and checkpoints remain outside the repository. See [bootstrap](../README.md#initial-repository-baseline-experimental).
 
-If `docwizz.yaml` defines `scope.projects.include`, bootstrap limits C# loading to the listed .NET projects; invalid scopes are rejected.
+For performance tuning, `--max-workers` controls concurrent model calls; `--verify-workers` controls concurrent isolated container tests (1-4, default 1). Increase them separately and compare `timings.generationSeconds` against `timings.verificationSeconds` in `--format json` output. Concurrent builds need enough CPU, RAM, and disk I/O. Each proposal still restores, builds, and runs independently inside disposable containers. If `docwizz.yaml` defines `scope.projects.include`, bootstrap limits C# loading to the listed .NET projects; invalid scopes are rejected.
 
 ## Draft an ADO test plan
 
