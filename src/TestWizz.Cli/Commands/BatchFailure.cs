@@ -25,30 +25,43 @@ internal sealed partial record BatchFailure(string Code, string Message)
     /// </summary>
     public static BatchFailure FromGeneration(JsonNode? result)
     {
-        var errors = (result?["findings"] as JsonArray)?.OfType<JsonObject>()
-            .Where(f => (string?)f["severity"] == "error").ToList() ?? [];
+        var errors = (Member(result, "findings") as JsonArray)?.OfType<JsonObject>()
+            .Where(f => Text(f, "severity") == "error").ToList() ?? [];
         if (errors.Count == 0)
             return Create("generate.failed", "Generation did not produce a valid proposal.");
         var first = errors[0];
-        var message = new StringBuilder((string?)first["message"] ?? "Validation failed.");
-        if (first["line"] is JsonValue line && line.TryGetValue<int>(out var number))
+        var message = new StringBuilder(Text(first, "message") ?? "Validation failed.");
+        if (Number(first, "line") is { } number)
             message.Append(CultureInfo.InvariantCulture, $" (line {number})");
         if (errors.Count > 1)
             message.Append(CultureInfo.InvariantCulture, $"; {errors.Count - 1} more error(s)");
-        return Create("validation." + ((string?)first["code"] ?? "failed"), message.ToString());
+        return Create("validation." + (Text(first, "code") ?? "failed"), message.ToString());
     }
 
     /// <summary>Why <c>run</c> did not pass, from its JSON result.</summary>
     public static BatchFailure FromRun(JsonNode? response)
     {
-        if ((string?)response?["status"] == "error")
-            return Create((string?)response?["error"]?["code"] ?? "run.error", (string?)response?["error"]?["message"] ?? "Run failed.");
-        var result = response?["result"];
-        var summary = result?["summary"];
-        var status = (string?)result?["status"] ?? "failed";
+        if (Text(response, "status") == "error")
+        {
+            var error = Member(response, "error");
+            return Create(Text(error, "code") ?? "run.error", Text(error, "message") ?? "Run failed.");
+        }
+
+        var result = Member(response, "result");
+        var summary = Member(result, "summary");
+        var status = Text(result, "status") ?? "failed";
         return Create("run." + status, string.Create(CultureInfo.InvariantCulture,
-            $"{(int?)summary?["passed"] ?? 0} passed, {(int?)summary?["failed"] ?? 0} failed, {(int?)summary?["compileErrors"] ?? 0} compile error(s)."));
+            $"{Number(summary, "passed") ?? 0} passed, {Number(summary, "failed") ?? 0} failed, {Number(summary, "compileErrors") ?? 0} compile error(s)."));
     }
+
+    // External JSON can have any shape: indexing a non-object or casting a value of another kind would throw.
+    private static JsonNode? Member(JsonNode? node, string name) => node is JsonObject obj ? obj[name] : null;
+
+    private static string? Text(JsonNode? node, string name) =>
+        Member(node, name) is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+
+    private static int? Number(JsonNode? node, string name) =>
+        Member(node, name) is JsonValue value && value.TryGetValue<int>(out var number) ? number : null;
 
     /// <summary>
     /// Transient model or transport problems that another attempt may fix. Configuration, authorization, policy,

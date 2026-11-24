@@ -112,6 +112,34 @@ public sealed class BatchFailureTests
     }
 
     [Theory]
+    [InlineData("[1, 2]")]
+    [InlineData("\"text\"")]
+    [InlineData("42")]
+    [InlineData("""{ "result": [ "x" ] }""")]
+    [InlineData("""{ "result": { "summary": "n/a", "status": 7 } }""")]
+    [InlineData("""{ "result": { "summary": { "passed": "two", "failed": 1.5 } } }""")]
+    [InlineData("""{ "status": "error", "error": "boom" }""")]
+    [InlineData("""{ "status": [ "error" ] }""")]
+    public void RunFailure_NeverThrowsOnWrongShapes(string json)
+    {
+        var failure = BatchFailure.FromRun(JsonNode.Parse(json));
+
+        Assert.StartsWith("run.", failure.Code, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("[1, 2]")]
+    [InlineData("\"text\"")]
+    [InlineData("""{ "findings": [ { "severity": "error", "code": 5, "message": [ "x" ], "line": 2.5 } ] }""")]
+    [InlineData("""{ "findings": [ { "severity": [ "error" ] } ] }""")]
+    public void GenerationFailure_NeverThrowsOnWrongShapes(string json)
+    {
+        var failure = BatchFailure.FromGeneration(JsonNode.Parse(json));
+
+        Assert.False(string.IsNullOrEmpty(failure.Code));
+    }
+
+    [Theory]
     [InlineData("", "Unknown failure.")]
     [InlineData("   ", "Unknown failure.")]
     [InlineData("plain message", "plain message")]
