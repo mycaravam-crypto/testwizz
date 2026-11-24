@@ -109,13 +109,24 @@ public static partial class ConfigJson
             ["timeoutSeconds"] = config.Ai.TimeoutSeconds,
             ["maxContextTokens"] = config.Ai.MaxContextTokens,
         },
-        ["run"] = new JsonObject
-        {
-            ["runtime"] = RuntimeName(config.Run.Runtime),
-            ["maxRepairAttempts"] = config.Run.MaxRepairAttempts,
-        },
+        ["run"] = RunToJson(config.Run),
         ["output"] = config.Output,
     };
+
+    private static JsonObject RunToJson(RunSettings run)
+    {
+        var json = new JsonObject
+        {
+            ["runtime"] = RuntimeName(run.Runtime),
+            ["maxRepairAttempts"] = run.MaxRepairAttempts,
+        };
+        if (run.Image is not null)
+        {
+            json["image"] = run.Image;
+        }
+
+        return json;
+    }
 
     private static AiSettings ReadAi(ObjectReader? reader, AiSettings defaults, List<ConfigError> errors)
     {
@@ -170,8 +181,15 @@ public static partial class ConfigJson
 
         var repairs = reader.IntInRange("maxRepairAttempts", 0, MaxRepairAttemptsLimit) ?? defaults.MaxRepairAttempts;
 
+        var image = reader.Has("image") ? reader.NullableString("image") : defaults.Image;
+        if (image is not null && Running.ContainerImage.Problem(image) is { } problem)
+        {
+            errors.Add(new ConfigError(reader.PathOf("image"), problem));
+            image = null;
+        }
+
         reader.RejectUnknown();
-        return new RunSettings(runtime, repairs);
+        return new RunSettings(runtime, repairs, image);
     }
 
     private static Uri? ParseEndpoint(string text, string path, List<ConfigError> errors)

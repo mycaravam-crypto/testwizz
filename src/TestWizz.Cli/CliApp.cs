@@ -33,6 +33,7 @@ public sealed class CliApp(
         JourneyDraftCommand.Definition,
         BootstrapCommand.Definition,
         RunCommand.Definition,
+        PreflightCommand.Definition,
         ApplyCommand.Definition,
     ];
 

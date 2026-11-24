@@ -43,6 +43,13 @@ public sealed record TestOutcome(
     string? StackTrace,
     IReadOnlyList<string> Scenarios);
 
+/// <summary>
+/// Why a phase failed when the cause is recognizable from its log (e.g. an untrusted TLS certificate during
+/// restore). The message is fixed text with a remedy; it never echoes log content, so it cannot leak credentials.
+/// </summary>
+/// <param name="Code">Stable code such as <c>restore.tls_untrusted</c>, <c>restore.feed_auth</c> or <c>restore.image_unavailable</c>.</param>
+public sealed record RunDiagnosis(string Code, string Message);
+
 /// <summary><c>testwizz.run/v1</c>: what happened when a proposal's tests were built and run in a container.</summary>
 public sealed record RunResult(
     string ProposalId,
@@ -52,7 +59,8 @@ public sealed record RunResult(
     IReadOnlyList<RunPhase> Phases,
     IReadOnlyList<string> StaleSources,
     IReadOnlyList<CompileError> CompileErrors,
-    IReadOnlyList<TestOutcome> Tests)
+    IReadOnlyList<TestOutcome> Tests,
+    RunDiagnosis? Diagnosis = null)
 {
     public const string Schema = "testwizz.run/v1";
 
@@ -73,7 +81,18 @@ public static class RunJson
         _ => throw new ArgumentOutOfRangeException(nameof(status)),
     };
 
-    public static JsonObject ToJson(RunResult r) => new()
+    public static JsonObject ToJson(RunResult r)
+    {
+        var json = Base(r);
+        if (r.Diagnosis is { } diagnosis)
+        {
+            json["diagnosis"] = new JsonObject { ["code"] = diagnosis.Code, ["message"] = diagnosis.Message };
+        }
+
+        return json;
+    }
+
+    private static JsonObject Base(RunResult r) => new()
     {
         ["schema"] = RunResult.Schema,
         ["proposalId"] = r.ProposalId,

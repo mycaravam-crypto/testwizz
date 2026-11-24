@@ -45,6 +45,12 @@ public sealed partial class DotNetTestRunner(IContainerRuntime runtime, RestoreC
         ["MSBUILDDISABLENODEREUSE"] = "1",
     };
 
+    /// <summary>
+    /// Whether the workspace file system distinguishes letter case; null probes the system temp folder. Tests set it to
+    /// reproduce Windows/macOS semantics on any host.
+    /// </summary>
+    internal bool? CaseSensitiveWorkspace { get; init; }
+
     public static string DefaultImage(string? targetFramework)
     {
         var versions = (targetFramework ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -59,6 +65,43 @@ public sealed partial class DotNetTestRunner(IContainerRuntime runtime, RestoreC
 
         var newest = versions.Max()!;
         return $"mcr.microsoft.com/dotnet/sdk:{newest.Major}.{newest.Minor}";
+    }
+
+    /// <summary>The repository files an isolated run copies: tracked and untracked-but-not-ignored, without build output.</summary>
+    public static List<string> WorkspaceFiles(string root) =>
+        [.. RepositoryFiles.Files(root, "*", MaxRepositoryFiles).Where(f => !f.Split('/').Any(s => s is "bin" or "obj" or ".git" or Scratch))];
+
+    /// <summary>
+    /// The default SDK image for the newest target framework declared in the repository's project and props files,
+    /// or null when none is declared. A run picks the image from its own test project; this is for preflight checks.
+    /// </summary>
+    public static string? DefaultImageForRepository(string root)
+    {
+        var frameworks = new List<string>();
+        foreach (var file in RepositoryFiles.Files(root, "*", MaxRepositoryFiles)
+            .Where(f => f.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".props", StringComparison.OrdinalIgnoreCase)))
+        {
+            try
+            {
+                var document = XDocument.Load(Path.Combine(root, file.Replace('/', Path.DirectorySeparatorChar)));
+                frameworks.AddRange(document.Descendants()
+                    .Where(e => e.Name.LocalName is "TargetFramework" or "TargetFrameworks")
+                    .Select(e => e.Value));
+            }
+            catch (Exception ex) when (ex is System.Xml.XmlException or IOException or UnauthorizedAccessException)
+            {
+                // Unreadable project files do not decide the image.
+            }
+        }
+
+        try
+        {
+            return frameworks.Count == 0 ? null : DefaultImage(string.Join(';', frameworks));
+        }
+        catch (ProposalException)
+        {
+            return null;
+        }
     }
 
     public async Task<RunOutput> RunAsync(string root, LoadedProposal proposal, RunOptions options, CancellationToken cancellationToken)
@@ -78,6 +121,11 @@ public sealed partial class DotNetTestRunner(IContainerRuntime runtime, RestoreC
             }
         }
 
+        // Checked before the workspace exists: a collision fails the run without copying (or overwriting) anything.
+        var files = WorkspaceFiles(root);
+        WorkspacePaths.Checked(files.Concat(proposal.Files.Select(f => f.Path)),
+            CaseSensitiveWorkspace ?? WorkspacePaths.DestinationIsCaseSensitive);
+
         var stale = ProposalReader.StaleSources(root, proposal);
         var workspace = Directory.CreateTempSubdirectory("testwizz-run-").FullName;
         var runId = Guid.NewGuid().ToString("N")[..12];
@@ -87,9 +135,6 @@ public sealed partial class DotNetTestRunner(IContainerRuntime runtime, RestoreC
         var cache = restoreCache ?? new RestoreCache();
         try
         {
-            var files = RepositoryFiles.Files(root, "*", MaxRepositoryFiles)
-                .Where(f => !f.Split('/').Any(s => s is "bin" or "obj" or ".git" or Scratch))
-                .ToList();
             var restoreFiles = files.Where(IsRestoreFile).ToList();
             var restoreCommand = new[] { "dotnet", "restore", testProject };
             var (restored, reused) = await cache.GetAsync(
@@ -101,7 +146,8 @@ public sealed partial class DotNetTestRunner(IContainerRuntime runtime, RestoreC
                 : new RunPhase("restore", Network: true, restored.ExitCode, restored.DurationMs, restored.TimedOut));
             if (!restored.Succeeded)
             {
-                return Done(restored.TimedOut ? RunStatus.Timeout : RunStatus.RestoreFailed, [], []);
+                return Done(restored.TimedOut ? RunStatus.Timeout : RunStatus.RestoreFailed, [], [],
+                    restored.TimedOut ? null : RestoreDiagnostics.Diagnose(restored.Log));
             }
 
             // The restore files and restore's obj output; the package folder itself is only ever mounted read-only.
@@ -195,8 +241,8 @@ public sealed partial class DotNetTestRunner(IContainerRuntime runtime, RestoreC
             return (result, result.TimedOut);
         }
 
-        RunOutput Done(RunStatus status, IReadOnlyList<CompileError> errors, IReadOnlyList<TestOutcome> tests) =>
-            new(new RunResult(proposal.Id, status, runtime.Name, image, phases, stale, errors, tests), logs);
+        RunOutput Done(RunStatus status, IReadOnlyList<CompileError> errors, IReadOnlyList<TestOutcome> tests, RunDiagnosis? diagnosis = null) =>
+            new(new RunResult(proposal.Id, status, runtime.Name, image, phases, stale, errors, tests, diagnosis), logs);
     }
 
     private static bool IsRestoreFile(string path)
