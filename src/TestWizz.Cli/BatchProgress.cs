@@ -93,11 +93,19 @@ internal sealed class BatchProgress : IDisposable
         Draw(force: _interactive || _clock.Elapsed - _lastReport >= TimeSpan.FromSeconds(15));
     }
 
-    public void Note(string message)
+    public void Note(string message) => Line(Clean(message));
+
+    /// <summary>
+    /// A per-target failure line (code, message, proposal path). Longer than a note so the reason and path stay
+    /// intact, but still bounded and terminal-sanitized.
+    /// </summary>
+    public void Failure(string message) => Line(Clean(message, 1200));
+
+    private void Line(string text)
     {
         if (_quiet) return;
         ClearLine();
-        _writer.WriteLine($"testwizz {_command}: {Clean(message)}");
+        _writer.WriteLine($"testwizz {_command}: {text}");
         if (_interactive && !_finished) Draw(force: true);
     }
 
@@ -229,13 +237,13 @@ internal sealed class BatchProgress : IDisposable
         return max <= 1 ? "…" : value[..(max - 1)] + "…";
     }
 
-    private static string Clean(string? value)
+    private static string Clean(string? value, int max = 200)
     {
         if (string.IsNullOrWhiteSpace(value)) return "";
-        var text = new StringBuilder(Math.Min(value.Length, 200));
+        var text = new StringBuilder(Math.Min(value.Length, max));
         foreach (var c in value)
         {
-            if (text.Length >= 200) break;
+            if (text.Length >= max) break;
             if (char.IsControl(c)) text.Append(' ');
             else text.Append(c);
         }

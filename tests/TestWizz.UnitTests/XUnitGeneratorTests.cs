@@ -374,6 +374,185 @@ public sealed class XUnitValidatorTests : IDisposable
         Assert.Contains("Store", finding.Message, StringComparison.Ordinal);
     }
 
+    private const string FormTypeSource = """
+        namespace Shop;
+
+        public enum FormType { Order, Invoice }
+
+        public interface IShape { }
+
+        public sealed class Square : IShape { }
+        """;
+
+    private const string FormTypeExtensionsSource = """
+        using System.Collections.Generic;
+
+        namespace Shop.Forms;
+
+        public static class FormTypeExtensions
+        {
+            public static string GetName(this Shop.FormType type) => type.ToString();
+            public static string GetName(this Shop.FormType type, bool upper) => upper ? type.ToString().ToUpperInvariant() : type.ToString();
+            public static string Label(this Shop.FormType type, string prefix = "#", int width = 1) => prefix + type;
+            public static string Describe(this Shop.FormType? type) => type?.ToString() ?? "none";
+            public static T FirstOr<T>(this IEnumerable<T> items, T fallback) => fallback;
+            public static string Kind<T>(this T shape) where T : Shop.IShape => shape.GetType().Name;
+            public static int Corners(this Shop.IShape shape) => 4;
+        }
+        """;
+
+    /// <summary>Validates <c>Assert.Equal(expected, EXPR)</c> against a repository with <c>FormType</c> extension methods.</summary>
+    private GenerationResult AssembleExtensionCall(string expression, string expected = "\"Order\"", bool importNamespace = true, string? testProjectUsing = null)
+    {
+        File.WriteAllText(Path.Combine(_fixture, "src", "Shop", "FormType.cs"), FormTypeSource);
+        File.WriteAllText(Path.Combine(_fixture, "src", "Shop", "FormTypeExtensions.cs"), FormTypeExtensionsSource);
+        if (testProjectUsing is not null)
+        {
+            var csproj = Path.Combine(_fixture, "tests", "Shop.Tests", "Shop.Tests.csproj");
+            File.WriteAllText(csproj, File.ReadAllText(csproj).Replace(
+                "<Using Include=\"Xunit\" />", "<Using Include=\"Xunit\" />\n    " + testProjectUsing, StringComparison.Ordinal));
+        }
+
+        var code = (importNamespace ? "using Shop.Forms;\n\n" : "") + """
+            namespace Shop.Tests;
+
+            public class CalculatorDivideTests
+            {
+                [Fact]
+                [Trait("Scenario", "S1")]
+                public void Divide_ReturnsQuotient()
+                {
+                    var type = FormType.Order;
+                    Assert.Equal(EXPECTED, EXPR);
+                }
+
+                [Fact]
+                [Trait("Scenario", "S2")]
+                public void Divide_ByZero_Throws() => Assert.Throws<DivideByZeroException>(() => new Calculator().Divide(1, 0));
+
+                [Fact]
+                [Trait("Scenario", "S3")]
+                public void Divide_ByOne_ReturnsDividend() => Assert.Equal(3, new Calculator().Divide(3, 1));
+            }
+            """.Replace("EXPECTED", expected, StringComparison.Ordinal).Replace("EXPR", expression, StringComparison.Ordinal);
+        return Assemble("Calculator.Divide", code);
+    }
+
+    [Theory]
+    [InlineData("type.GetName()")]
+    [InlineData("type.GetName(upper: true)")]
+    [InlineData("FormTypeExtensions.GetName(type)")]
+    [InlineData("Shop.Forms.FormTypeExtensions.GetName(type, true)")]
+    [InlineData("type.Label()")]
+    [InlineData("type.Label(width: 2)")]
+    [InlineData("((FormType?)type).Describe()")]
+    [InlineData("new[] { type }.FirstOr(FormType.Invoice).GetName()")]
+    [InlineData("new Square().Kind()")]
+    [InlineData("new Square().Corners().ToString()")]
+    public void ExtensionMethodCalls_BindLikeTheRealBuild(string expression)
+    {
+        var result = AssembleExtensionCall(expression);
+
+        Assert.True(result.IsValid, string.Join("; ", result.Findings.Select(f => $"{f.Code}: {f.Message}")));
+    }
+
+    [Fact]
+    public void ExtensionMethod_ImportedByTestProjectGlobalUsing_IsValid()
+    {
+        var result = AssembleExtensionCall("type.GetName()", importNamespace: false, testProjectUsing: "<Using Include=\"Shop.Forms\" />");
+
+        Assert.True(result.IsValid, string.Join("; ", result.Findings.Select(f => $"{f.Code}: {f.Message}")));
+    }
+
+    [Fact]
+    public void ExtensionMethod_ImportedByStaticOrAliasGlobalUsing_IsValid()
+    {
+        Assert.True(AssembleExtensionCall("GetName(type)", importNamespace: false,
+            testProjectUsing: "<Using Include=\"Shop.Forms.FormTypeExtensions\" Static=\"true\" />").IsValid);
+    }
+
+    [Fact]
+    public void ExtensionMethod_InUnimportedNamespace_IsMissingUsingNotSignatureMismatch()
+    {
+        // Without the import Roslyn binds System.Enum.GetName(...) and reports CS1501 "takes 0 arguments".
+        var result = AssembleExtensionCall("type.GetName()", importNamespace: false);
+
+        var finding = Assert.Single(result.Findings, f => f.Severity == "error");
+        Assert.Equal("missing-using", finding.Code);
+        Assert.Contains("using Shop.Forms;", finding.Message, StringComparison.Ordinal);
+        Assert.Equal(10, finding.Line);
+    }
+
+    [Fact]
+    public void UnsafeGlobalUsingItems_AreIgnored()
+    {
+        var result = AssembleExtensionCall("type.GetName()", importNamespace: false,
+            testProjectUsing: "<Using Include=\"Shop.Forms; class Injected { }\" />");
+
+        Assert.Equal("missing-using", Assert.Single(result.Findings, f => f.Severity == "error").Code);
+    }
+
+    [Fact]
+    public void GlobalUsingTree_KeepsOnlySingleWellFormedDirectives()
+    {
+        var tree = XUnitValidator.GlobalUsingTree(
+        [
+            "global using Shop.Forms;",
+            "global using static System.Math;",
+            "global using Calc = Shop.Calculator;",
+            "global using Shop; class Injected { }",
+            "global using Shop; global using System.IO;",
+            "using Shop;",
+            "global using Shop /* hidden */;",
+            "[assembly: System.Obsolete] global using Shop;",
+            "global using Shop",
+            "",
+        ]);
+
+        var root = (Microsoft.CodeAnalysis.CSharp.Syntax.CompilationUnitSyntax)tree.GetRoot(TestContext.Current.CancellationToken);
+        Assert.Empty(root.Members);
+        Assert.Empty(root.AttributeLists);
+        Assert.Equal(["global using Shop.Forms;", "global using static System.Math;", "global using Calc = Shop.Calculator;"],
+            root.Usings.Select(u => u.ToString()));
+    }
+
+    [Theory]
+    [InlineData("type.GetName(1, 2, 3)", "signature-mismatch")]
+    [InlineData("type.Label(missing: 1)", "signature-mismatch")]
+    [InlineData("FormTypeExtensions.GetName()", "signature-mismatch")]
+    [InlineData("type.Rename()", "unknown-member")]
+    [InlineData("FormTypeExtensions.Rename(type)", "unknown-member")]
+    [InlineData("\"text\".Corners().ToString()", "receiver-mismatch")]
+    public void InvalidExtensionCalls_AreStillRejected(string expression, string code)
+    {
+        var result = AssembleExtensionCall(expression);
+
+        Assert.Equal(code, Assert.Single(result.Findings, f => f.Severity == "error").Code);
+    }
+
+    [Fact]
+    public void OrdinaryMethodValidation_IsUnchanged()
+    {
+        Assert.True(AssembleExtensionCall("new Calculator().Divide(8, 2)", expected: "4").IsValid);
+        Assert.Equal("signature-mismatch", Assert.Single(AssembleExtensionCall("new Calculator().Divide(8)", expected: "4").Findings, f => f.Severity == "error").Code);
+        Assert.Equal("unknown-member", Assert.Single(AssembleExtensionCall("new Calculator().Multiply(8, 2)", expected: "4").Findings, f => f.Severity == "error").Code);
+    }
+
+    [Fact]
+    public void Conventions_ReportTestProjectGlobalUsings()
+    {
+        var csproj = Path.Combine(_fixture, "tests", "Shop.Tests", "Shop.Tests.csproj");
+        File.WriteAllText(csproj, File.ReadAllText(csproj).Replace("<Using Include=\"Xunit\" />",
+            "<Using Include=\"Xunit\" /><Using Include=\"Shop.Forms\" /><Using Include=\"System.Math\" Static=\"true\" /><Using Include=\"Shop.Calculator\" Alias=\"Calc\" /><Using Include=\"Bad Name\" /><Using Include=\"Gone\" /><Using Remove=\"Gone\" />",
+            StringComparison.Ordinal));
+        var provider = RoslynContextProvider.Load(_fixture, TestContext.Current.CancellationToken);
+
+        var conventions = XUnitConventions.Detect(_fixture, provider.GetContext("Calculator.Divide", "test"));
+
+        Assert.Equal(["global using Xunit;", "global using Shop.Forms;", "global using static System.Math;", "global using Calc = Shop.Calculator;"], conventions.GlobalUsings);
+        Assert.True(conventions.XunitGlobalUsing);
+    }
+
     [Fact]
     public void ExternalPackageTypes_AreNotFlagged()
     {
@@ -442,6 +621,26 @@ public sealed class XUnitGeneratorTests : IAsyncLifetime
         Assert.Contains("Mocking library: NSubstitute", user, StringComparison.Ordinal);
         Assert.Contains("- S2 [exception] Throws DivideByZeroException when divisor == 0", user, StringComparison.Ordinal);
         Assert.Contains("public class CalculatorTests", user, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Prompt_ListsProjectGlobalUsingsAndIgnoresMalformedEntries()
+    {
+        var provider = RoslynContextProvider.Load(_fixture, TestContext.Current.CancellationToken);
+        var context = provider.GetContext("Calculator.Divide", "test");
+        var extractor = new CSharpScenarioExtractor();
+        var plan = ScenarioPlanner.Create(context, extractor.Version, extractor.Extract(context));
+        var conventions = XUnitConventions.Detect(_fixture, context) with
+        {
+            GlobalUsings = ["global using Xunit;", "global using Shop.Forms;", "global using static System.Math;",
+                "global using Calc = Shop.Calculator;", "", "x", "global using ", "using Shop.Other;"],
+        };
+
+        var request = XUnitGenerator.BuildRequest(context, plan, conventions);
+
+        var line = request.User.Split('\n').Single(l => l.StartsWith("Global usings already present:", StringComparison.Ordinal));
+        Assert.EndsWith("; Xunit; Shop.Forms; static System.Math; Calc = Shop.Calculator", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("Shop.Other", line, StringComparison.Ordinal);
     }
 
     [Fact]

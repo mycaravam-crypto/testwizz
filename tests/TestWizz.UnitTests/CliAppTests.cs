@@ -62,8 +62,9 @@ public sealed class CliAppTests : IDisposable
     [Fact]
     public void Bootstrap_EmptyRepository_HasDeterministicJsonResult()
     {
+        using var output = new TemporaryOutput();
         File.WriteAllText(ConfigPath, """{ "version": 1 }""");
-        var (exit, stdout, stderr) = Run("bootstrap", "--all", "--generate-only", "--format", "json");
+        var (exit, stdout, stderr) = Run("bootstrap", "--all", "--generate-only", "--out", output.Path, "--format", "json");
         Assert.Equal(ExitCodes.Success, exit);
         var json = ParseJson(stdout);
         Assert.Equal("bootstrap", (string)json["command"]!);

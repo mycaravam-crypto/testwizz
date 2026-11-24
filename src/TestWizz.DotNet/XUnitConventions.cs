@@ -12,7 +12,7 @@ namespace TestWizz.DotNet;
 /// test, mocking and assertion packages it already has, and how existing tests are named and namespaced.
 /// Packages are only ever reported, never added.
 /// </summary>
-public sealed record XUnitConventions(
+public sealed partial record XUnitConventions(
     string? TargetProject,
     string? TestProject,
     string? TargetFramework,
@@ -32,6 +32,13 @@ public sealed record XUnitConventions(
     IReadOnlyList<GenerationFinding> Findings)
 {
     public const int MaxStyleExampleChars = 4000;
+
+    /// <summary>
+    /// Global using directives the test project's build adds from <c>&lt;Using&gt;</c> items (project file and
+    /// Directory.Build.props), e.g. <c>global using Shop.Extensions;</c>. Generated code is validated with them so
+    /// extension methods the real build can see are visible to validation as well.
+    /// </summary>
+    public IReadOnlyList<string> GlobalUsings { get; init; } = [];
 
     private static readonly string[] MockingLibraries = ["NSubstitute", "Moq", "FakeItEasy"];
     private static readonly string[] AssertionLibraries = ["FluentAssertions", "AwesomeAssertions", "Shouldly"];
@@ -124,7 +131,10 @@ public sealed record XUnitConventions(
             [.. testNames.Take(5)],
             style.Path,
             style.Text is null ? null : style.Text.Length <= MaxStyleExampleChars ? style.Text : style.Text[..MaxStyleExampleChars],
-            findings);
+            findings)
+        {
+            GlobalUsings = testProject?.GlobalUsingDirectives() ?? [],
+        };
     }
 
     public JsonObject ToJson() => new()
@@ -197,6 +207,12 @@ public sealed record XUnitConventions(
         };
     }
 
+    [System.Text.RegularExpressions.GeneratedRegex(@"^(global::)?[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex QualifiedName();
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"^[A-Za-z_][A-Za-z0-9_]*$", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex Identifier();
+
     /// <summary>The parts of a .csproj (plus Directory.Build.props / Directory.Packages.props above it) that matter here.</summary>
     private sealed class Project
     {
@@ -254,13 +270,45 @@ public sealed record XUnitConventions(
                         case "ProjectReference" when file == FullPath:
                             References.Add(System.IO.Path.GetFullPath(System.IO.Path.Combine(projectDirectory, include.Replace('\\', System.IO.Path.DirectorySeparatorChar))));
                             break;
-                        case "Using" when item.Attribute("Static") is null && item.Attribute("Alias") is null:
-                            Usings.Add(include);
+                        case "Using":
+                            var isStatic = string.Equals(item.Attribute("Static")?.Value, "true", StringComparison.OrdinalIgnoreCase);
+                            var alias = item.Attribute("Alias")?.Value;
+                            if (!isStatic && alias is null)
+                            {
+                                Usings.Add(include);
+                            }
+
+                            _usingItems.Add((include.Trim(), isStatic, alias?.Trim()));
                             break;
                     }
                 }
+
+                // <Using Remove="..."/> drops an inherited or SDK-provided global using.
+                foreach (var removed in document.Descendants().Where(e => e.Name.LocalName == "Using")
+                             .Select(e => e.Attribute("Remove")?.Value?.Trim()).OfType<string>())
+                {
+                    Usings.RemoveAll(u => u == removed);
+                    _usingItems.RemoveAll(u => u.Name == removed);
+                }
             }
         }
+
+        private readonly List<(string Name, bool Static, string? Alias)> _usingItems = [];
+
+        /// <summary>
+        /// The <c>&lt;Using&gt;</c> items as C# <c>global using</c> directives. Values come from repository files, so
+        /// only plain (optionally <c>global::</c>-qualified) dotted names and identifier aliases are accepted; anything
+        /// else is dropped rather than compiled.
+        /// </summary>
+        public IReadOnlyList<string> GlobalUsingDirectives() =>
+        [
+            .. _usingItems
+                .Where(u => QualifiedName().IsMatch(u.Name) && (u.Alias is null || Identifier().IsMatch(u.Alias)))
+                .Select(u => u.Alias is { } alias ? $"global using {alias} = {u.Name};"
+                    : u.Static ? $"global using static {u.Name};"
+                    : $"global using {u.Name};")
+                .Distinct(StringComparer.Ordinal),
+        ];
 
         public string Path { get; }
 

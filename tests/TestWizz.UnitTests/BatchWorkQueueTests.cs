@@ -87,6 +87,7 @@ public sealed class BatchWorkQueueTests
         var started = new ConcurrentQueue<int>();
         var startedSecond = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var countStarted = 0;
+        var failureObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var finished = new List<int>();
         int[] targets = [0, 1, 2, 3];
         var run = BatchWorkQueue.RunAsync(
@@ -97,7 +98,11 @@ public sealed class BatchWorkQueueTests
                 if (Interlocked.Increment(ref countStarted) == 2) startedSecond.TrySetResult();
                 return i == 0 ? Task.FromResult(-1) : slow.Task;
             },
-            (i, result, _) => finished.Add(i),
+            (i, result, _) =>
+            {
+                finished.Add(i);
+                if (result < 0) failureObserved.TrySetResult();
+            },
             result => result < 0,
             null,
             TestContext.Current.CancellationToken);
@@ -105,6 +110,11 @@ public sealed class BatchWorkQueueTests
             Task.Delay(5000, TestContext.Current.CancellationToken));
         Assert.Same(startedSecond.Task, signal);
         Assert.Equal(2, started.Count);
+        // Release the slow item only after the coordinator has seen the failure. Otherwise, when the thread
+        // pool runs item 1 before item 0, item 1 can complete first and legitimately trigger a refill.
+        var observed = await Task.WhenAny(failureObserved.Task,
+            Task.Delay(5000, TestContext.Current.CancellationToken));
+        Assert.Same(failureObserved.Task, observed);
         Assert.False(run.IsCompleted);
         slow.SetResult(1);
         var outcome = await run;
@@ -151,20 +161,28 @@ public sealed class BatchWorkQueueTests
     }
 
     [Fact]
-    public void DefaultAdaptiveLimit_RampsUpAndBacksOffWhenThroughputFalls()
+    public void DefaultAdaptiveLimit_RampsUpOnRollingWindowsAndBacksOffOnlyOnSustainedRegression()
     {
         var tuning = new AdaptiveWorkerLimit(4);
         Assert.Equal(1, tuning.Current);
-        tuning.Completed(TimeSpan.FromSeconds(1));
+        tuning.Completed(TimeSpan.FromSeconds(1));      // level 1: one window of 1 item/s
         Assert.Equal(2, tuning.Current);
+        // Level 2 windows hold two completions; it needs two windows before it may change.
         tuning.Completed(TimeSpan.FromSeconds(1.5));
+        tuning.Completed(TimeSpan.FromSeconds(2));      // window 1: 2 items/s
         Assert.Equal(2, tuning.Current);
-        tuning.Completed(TimeSpan.FromSeconds(2));
-        Assert.Equal(3, tuning.Current);
         tuning.Completed(TimeSpan.FromSeconds(2.5));
-        tuning.Completed(TimeSpan.FromSeconds(3));
-        tuning.Completed(TimeSpan.FromSeconds(5));
-        Assert.Equal(2, tuning.Current);
+        tuning.Completed(TimeSpan.FromSeconds(3));      // window 2: rolling mean 2/s > 1/s + 10%
+        Assert.Equal(3, tuning.Current);
+
+        // Level 3 windows hold three completions; only the window's last completion time matters.
+        void Window(double end) { tuning.Completed(TimeSpan.FromSeconds(end - 0.2)); tuning.Completed(TimeSpan.FromSeconds(end - 0.1)); tuning.Completed(TimeSpan.FromSeconds(end)); }
+        Window(4.25);                                   // 3 items in 1.25 s = 2.4/s (measuring)
+        Window(6.25);                                   // one slow window, 1.5/s: rolling mean 1.95/s
+        Assert.Equal(3, tuning.Current);                // stays inside the band around level 2 (2/s)
+        Window(9.25);                                   // sustained regression, 1/s: rolling mean 1.63/s
+        Assert.Equal(2, tuning.Current);                // < 2/s - 15%: one step down
+        Assert.Equal("decrease", tuning.Controller.LastDecision);
     }
 
     [Fact]

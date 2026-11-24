@@ -96,10 +96,14 @@ For commands use [README](README.md), for setup [Getting started](docs/getting-s
 - Generated .NET tests run only in isolated containers and require an available container runtime. Reviewed `journey` actions can mutate data on a disposable local UI fixture; TestWizz does not run AI-generated UI tests. Proposed test files enter the repository only through explicit guarded `apply`.
 - Source text is untrusted prompt input; embedded instructions are ignored and covered by regression tests.
 - Timeouts, cancellation and token budgets on every AI call; AI unavailability never corrupts state.
+- Batch retries cover transient model failures only and never bypass validation; failure reasons are sanitized (bounded, control characters stripped, credentials redacted) before they reach stderr or a checkpoint.
+- A checkpoint is a cache, never authority to approve or apply. Bootstrap refuses to replace one without `--resume` or `--restart`; new checkpoint fields are additive, so `testwizz.bootstrap-checkpoint/v1` stays compatible in both directions.
 
 ## 9. Verification
 
-- **Unit:** config/arg parsing, endpoint guard, path confinement, scenario extraction, schema validation, hash/staleness checks.
+- **Unit:** config/arg parsing, endpoint guard, path confinement, scenario extraction, schema validation, hash/staleness checks, adaptive-concurrency decisions from synthetic throughput samples, failure classification and redaction.
+- **Validation regression:** extension-method binding (reduced/static calls, overloads, generics, optional/named parameters, receivers, project global usings, missing namespaces) next to unchanged ordinary-method rejection.
+- **Bootstrap (fake model):** failure reasons on stderr and in the checkpoint, checkpoint replacement guard, recovered-proposal counts, bounded retries, non-retried failures and cancellation during back-off followed by `--resume`.
 - **Component (offline, CI):** fake AI server (valid, malformed, empty, timeout, prompt injection), fake DocWizz CLI, fake container runtime.
 - **Fixture/golden:** `fixtures/dotnet` and `fixtures/vue` produce stable context and plan JSON (timestamps/order normalized).
 - **Real local-model acceptance (open):** one trusted UI route, two acceptance criteria, reviewed Playwright assertions and an intentional negative mutation ([#61](https://github.com/mycaravam-crypto/testwizz/issues/61)). Fake-model CI validates the pipeline, not real-model assertion quality.
@@ -116,7 +120,7 @@ Closing a milestone issue does not imply that every capability in its original r
 | M3 — Run, repair, apply | Isolated .NET/xUnit run and repair; guarded apply | No Vue/Vitest or Playwright runner | #9, #10 closed, narrowed |
 | M4 — Workflow | C# `--since`, CI-oriented output, adaptive batch generation | No NUnit/MSTest/Jest adapters or Vue changed-code generation | #12 closed, narrowed |
 | UI and ADO | UI proposals, plan-wide ADO drafts from explicit Tested By links, reviewed evidence | Real-model acceptance [#61](https://github.com/mycaravam-crypto/testwizz/issues/61); per-case route discovery and autonomous execution unsupported | #61 open |
-| Safety and resilience | Endpoint controls, UI network restrictions, bootstrap checkpoints | Snapshot data exposure [#11](https://github.com/mycaravam-crypto/testwizz/issues/11) and failure/resume regression [#27](https://github.com/mycaravam-crypto/testwizz/issues/27) | #11, #27 open |
+| Safety and resilience | Endpoint controls, UI network restrictions, bootstrap checkpoints guarded against accidental replacement (`--restart`), bounded retries for transient model failures, persisted failure reasons, rolling-throughput adaptive concurrency with hysteresis ([#83](https://github.com/mycaravam-crypto/testwizz/issues/83)) | Snapshot data exposure [#11](https://github.com/mycaravam-crypto/testwizz/issues/11) and failure/resume regression [#27](https://github.com/mycaravam-crypto/testwizz/issues/27) | #11, #27 open |
 
 Extend framework support only when a concrete use case and acceptance criteria justify it.
 
