@@ -67,6 +67,43 @@ public sealed partial class DotNetTestRunner(IContainerRuntime runtime, RestoreC
         return $"mcr.microsoft.com/dotnet/sdk:{newest.Major}.{newest.Minor}";
     }
 
+    /// <summary>The repository files an isolated run copies: tracked and untracked-but-not-ignored, without build output.</summary>
+    public static List<string> WorkspaceFiles(string root) =>
+        [.. RepositoryFiles.Files(root, "*", MaxRepositoryFiles).Where(f => !f.Split('/').Any(s => s is "bin" or "obj" or ".git" or Scratch))];
+
+    /// <summary>
+    /// The default SDK image for the newest target framework declared in the repository's project and props files,
+    /// or null when none is declared. A run picks the image from its own test project; this is for preflight checks.
+    /// </summary>
+    public static string? DefaultImageForRepository(string root)
+    {
+        var frameworks = new List<string>();
+        foreach (var file in RepositoryFiles.Files(root, "*", MaxRepositoryFiles)
+            .Where(f => f.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".props", StringComparison.OrdinalIgnoreCase)))
+        {
+            try
+            {
+                var document = XDocument.Load(Path.Combine(root, file.Replace('/', Path.DirectorySeparatorChar)));
+                frameworks.AddRange(document.Descendants()
+                    .Where(e => e.Name.LocalName is "TargetFramework" or "TargetFrameworks")
+                    .Select(e => e.Value));
+            }
+            catch (Exception ex) when (ex is System.Xml.XmlException or IOException or UnauthorizedAccessException)
+            {
+                // Unreadable project files do not decide the image.
+            }
+        }
+
+        try
+        {
+            return frameworks.Count == 0 ? null : DefaultImage(string.Join(';', frameworks));
+        }
+        catch (ProposalException)
+        {
+            return null;
+        }
+    }
+
     public async Task<RunOutput> RunAsync(string root, LoadedProposal proposal, RunOptions options, CancellationToken cancellationToken)
     {
         root = Path.GetFullPath(root);
@@ -85,9 +122,7 @@ public sealed partial class DotNetTestRunner(IContainerRuntime runtime, RestoreC
         }
 
         // Checked before the workspace exists: a collision fails the run without copying (or overwriting) anything.
-        var files = RepositoryFiles.Files(root, "*", MaxRepositoryFiles)
-            .Where(f => !f.Split('/').Any(s => s is "bin" or "obj" or ".git" or Scratch))
-            .ToList();
+        var files = WorkspaceFiles(root);
         WorkspacePaths.Checked(files.Concat(proposal.Files.Select(f => f.Path)),
             CaseSensitiveWorkspace ?? WorkspacePaths.DestinationIsCaseSensitive);
 

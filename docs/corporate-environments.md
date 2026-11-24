@@ -48,6 +48,12 @@ docker run --rm testwizz-sdk:10.0-corporate \
   curl --fail --silent --show-error --output /dev/null https://api.nuget.org/v3/index.json && echo TLS OK
 ```
 
+Or let TestWizz check everything at once (after step 3):
+
+```bash
+testwizz preflight .
+```
+
 ## 3. Configure TestWizz
 
 ```yaml
@@ -72,6 +78,23 @@ test run with `--network none`. The restored package folder is mounted read-only
 Restores are shared within one batch only when the restore files, test project **and image** are identical.
 Because the cache lives only for one `run` or `bootstrap` invocation, rebuilding an image under the same tag
 takes effect on the next invocation.
+
+## Preflight
+
+`testwizz preflight [path] [--image <image>] [--skip-network]` is optional and checks one stage at a time, so a
+failure says *where* it happened:
+
+| Stage | Checks | Failure codes |
+| --- | --- | --- |
+| `runtime` | Docker/Podman answers | `preflight.runtime_unavailable` |
+| `workspace` | the temp folder is writable; repository paths can be copied side by side (case-only and file/folder collisions) | `preflight.temp_unwritable`, `run.path_collision` |
+| `image` | the effective image (`--image`, else `run.image`, else the newest target framework) starts `dotnet --version` with the network off | `preflight.image_unavailable`, `preflight.image_failed`, `run.unknown_framework` |
+| `nuget` | in the same image, a throw-away project restores one package from the feeds of the root `nuget.config` (or nuget.org) with TLS validation | the restore codes below, `preflight.nuget_failed` |
+
+Containers use the same hardening as `run`. Only the `nuget` stage has a network, and its workspace contains only
+the probe project and a copy of the root `nuget.config`; no repository code is copied or run. `--skip-network`
+skips the `nuget` stage. Output is redacted (credentials in URLs, tokens, JWTs). Exit code `0` when every stage
+passed or was skipped, `1` otherwise. Preflight requires no certificate configuration.
 
 ## Other restore diagnoses
 
