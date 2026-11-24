@@ -32,7 +32,7 @@ public sealed class ModelClientTests : IAsyncLifetime
             .Select(_ => client.ModelDigestAsync(TestContext.Current.CancellationToken));
         var digests = await Task.WhenAll(lookups);
         Assert.All(digests, value => Assert.Equal("sha256:abc123", value));
-        Assert.Single(_server.Requests.Where(request => request.Path == "/api/tags"));
+        Assert.Single(_server.Requests, request => request.Path == "/api/tags");
     }
 
     [Fact]
@@ -65,7 +65,7 @@ public sealed class ModelClientTests : IAsyncLifetime
         using var client = ModelClient.Create(TestSettings.OpenAi(OpenAiBase), _ => null);
         Assert.Null(await client.ModelDigestAsync(TestContext.Current.CancellationToken));
         Assert.Null(await client.ModelDigestAsync(TestContext.Current.CancellationToken));
-        Assert.Single(_server.Requests.Where(request => request.Path == "/v1/models"));
+        Assert.Single(_server.Requests, request => request.Path == "/v1/models");
     }
 
     [Fact]

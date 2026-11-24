@@ -38,7 +38,7 @@ public sealed class BatchWorkQueueTests
                 while (started.Count < 2) await Task.Delay(10);
             }), Task.Delay(5000));
         Assert.Equal(2, started.Count);
-        Assert.False(started.Contains(2));
+        Assert.DoesNotContain(2, started);
         fast.SetResult(1);
         var next = await Task.WhenAny(startedThird.Task, Task.Delay(5000));
         Assert.Same(startedThird.Task, next);
