@@ -267,29 +267,37 @@ public static class JourneyDraftBatch
                     if (exit != ExitCodes.Success)
                         throw new CliException("journey_batch.draft", "The individual draft was not generated.");
                     var result = JsonNode.Parse(writer.ToString())?["result"];
-                    items.Add(new JsonObject
-                    {
-                        ["testCaseId"] = caseId,
-                        ["workItemId"] = link.WorkItemId,
-                        ["status"] = "drafted",
-                        ["path"] = result?["path"]?.GetValue<string>(),
-                        ["reviewNotes"] = result?["reviewNotes"]?.GetValue<string>(),
-                    });
-                    drafted++;
-                    var draftPath = result?["path"]?.GetValue<string>();
-                    var reviewPath = result?["reviewNotes"]?.GetValue<string>();
-                    var reviewed = reviewPath is null ? "" : File.ReadAllText(reviewPath);
+                    // JourneyDraftCommand returns FILE paths, unlike the proposal-bundle
+                    // generators which return directory paths.
+                    var journeyFile = result?["path"]?.GetValue<string>();
+                    var reviewFile = result?["reviewNotes"]?.GetValue<string>();
+                    if (journeyFile is null || Path.GetFileName(journeyFile) != "journey.json" ||
+                        reviewFile is null || Path.GetFileName(reviewFile) != "review.md" ||
+                        BatchResume.ShaFile(journeyFile) is not { } journeySha ||
+                        BatchResume.ShaFile(reviewFile) is not { } reviewSha)
+                        throw new CliException("journey_batch.draft_artifact",
+                            "The individual draft did not produce valid journey.json and review.md files.");
+                    var reviewed = File.ReadAllText(reviewFile);
                     var criteria = Regex.Match(reviewed, @"(?m)^Criteria SHA-256: ([0-9a-f]{64})$").Groups[1].Value;
+                    if (criteria.Length != 64)
+                        throw new CliException("journey_batch.draft_artifact",
+                            "The review notes are missing the requirement criteria fingerprint.");
                     saved[key] = new JsonObject
                     {
                         ["key"] = key, ["status"] = "drafted",
                         ["testCaseId"] = caseId, ["workItemId"] = link.WorkItemId,
                         ["workItemRevision"] = result?["workItemRevision"]?.DeepClone(),
                         ["criteriaSha256"] = criteria,
-                        ["path"] = draftPath, ["draftSha256"] = draftPath is null ? null : BatchResume.ShaFile(draftPath),
-                        ["reviewNotes"] = reviewPath, ["reviewSha256"] = reviewPath is null ? null : BatchResume.ShaFile(reviewPath),
+                        ["path"] = journeyFile, ["draftSha256"] = journeySha,
+                        ["reviewNotes"] = reviewFile, ["reviewSha256"] = reviewSha,
                     };
                     Save();
+                    drafted++;
+                    items.Add(new JsonObject
+                    {
+                        ["testCaseId"] = caseId, ["workItemId"] = link.WorkItemId,
+                        ["status"] = "drafted", ["path"] = journeyFile, ["reviewNotes"] = reviewFile,
+                    });
                     log.Append("  drafted WI ").Append(link.WorkItemId).Append(" / case ").Append(caseId).Append('\n');
                 }
                 catch (CliException ex)
