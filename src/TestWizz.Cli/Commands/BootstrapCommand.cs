@@ -75,7 +75,17 @@ public static class BootstrapCommand
         var fingerprint = Fingerprint(root, config, targets, context.Has("--generate-only"), includedProjects, provider.SourceHashes, context.CancellationToken);
         context.Output.Stderr.WriteLine($"testwizz bootstrap: fingerprint ready ({clock.Elapsed.TotalSeconds:F1}s)");
         const string checkpointSchema = "testwizz.bootstrap-checkpoint/v1";
-        var saved = context.Has("--resume") ? BatchResume.Read(checkpoint, checkpointSchema, fingerprint) : new JsonArray();
+        JsonArray saved;
+        try
+        {
+            saved = context.Has("--resume")
+                ? BatchResume.Read(checkpoint, checkpointSchema, fingerprint) : new JsonArray();
+        }
+        catch (CliException ex) when (ex.Code.StartsWith("resume.", StringComparison.Ordinal))
+        {
+            // Preserve the bootstrap CLI's existing error codes for downstream scripts.
+            throw new CliException("bootstrap." + ex.Code["resume.".Length..], ex.Message);
+        }
         // Only reuse artifacts whose manifest digest and output confinement still match.
         // A pending/failed execution with a valid generated proposal resumes at the runner,
         // not at the model; a failed generation is retried.
