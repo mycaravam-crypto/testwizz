@@ -43,13 +43,15 @@ Legacy `testwizz.json` remains supported, but `testwizz.yaml` takes precedence. 
 ## Generate and apply C# tests
 
 ```bash
-testwizz bootstrap . --all --review
+testwizz bootstrap . --all --review --max-workers 2
+# If interrupted, use the same output path and execution mode:
+testwizz bootstrap . --all --review --max-workers 2 --resume
 testwizz apply . --all --verified-only
 git status --short
 dotnet test -c Release
 ```
 
-`bootstrap` generates C#/xUnit proposals and tests them in Docker/Podman; `--verified-only` copies only previously passing, unchanged proposals. Review added files before committing. Without a container, `bootstrap . --all --generate-only` makes **unverified** proposals instead. Use `bootstrap . --all --resume` to continue a scan with unchanged sources, configuration and scan mode. Proposals and checkpoints remain outside the repository. See [bootstrap](../README.md#initial-repository-baseline-experimental).
+`bootstrap` generates C#/xUnit proposals and tests them in Docker/Podman; `--verified-only` copies only previously passing, unchanged proposals. Review added files before committing. Without a container, `bootstrap . --all --generate-only` makes **unverified** proposals instead. Use `bootstrap . --all --resume` to continue a scan with unchanged sources, configuration and scan mode. Both generated proposals and test outcomes are checkpointed; pending tests are rerun without regenerating their proposals. For changed-code batches, use `testwizz generate . --since main --all-changed --resume` after an initial run. Proposals and checkpoints remain outside the repository. See [bootstrap](../README.md#initial-repository-baseline-experimental).
 
 If `docwizz.yaml` defines `scope.projects.include`, bootstrap limits C# loading to the listed .NET projects; invalid scopes are rejected.
 
@@ -62,6 +64,8 @@ export TESTWIZZ_JOURNEY_URL=http://127.0.0.1:5173/orders
 export TESTWIZZ_STORAGE_STATE=.auth/docwizz-state.json  # if login is required
 testwizz journey-draft . --plan-id 12 --list-only
 testwizz journey-draft . --plan-id 12
+# Restart a matching interrupted run:
+testwizz journey-draft . --plan-id 12 --resume
 ```
 
 Only explicit ADO Tested By links are used. Unlinked cases are skipped, drafts are not automatically executed, and all cases use the configured starting URL. To reuse a DocWizz login, copy its existing Playwright state into `.auth/` in the application repository, add `.auth/` to `.gitignore`, and use the **exact same origin** (hostname and port) as the login recording. Continue with [ADO journeys: review → capture → DocWizz](ado-journeys.md).

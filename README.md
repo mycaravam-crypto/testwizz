@@ -34,6 +34,7 @@ export TESTWIZZ_JOURNEY_URL=http://127.0.0.1:5173/orders
 export TESTWIZZ_STORAGE_STATE=.auth/docwizz-state.json
 testwizz journey-draft . --plan-id 12 --list-only   # inspect links without AI/browser
 testwizz journey-draft . --plan-id 12               # draft linked cases
+testwizz journey-draft . --plan-id 12 --resume      # restart after interruption
 ```
 
 A shared loopback start URL is required (environment variable or `--url`); ADO does not reliably provide a route per case. For protected pages, `--storage-state .auth/docwizz-state.json` (or `TESTWIZZ_STORAGE_STATE`) reuses the same Playwright cookies, localStorage and extended sessionStorage as DocWizz screenshots; the JWT stays out of the model prompt. Unlinked cases are skipped, multiple explicit links remain separate, and unsupported steps are reported. **Drafts are never executed or applied automatically.** Follow [ADO journeys](docs/ado-journeys.md) to review, capture screenshot evidence, and publish a DocWizz manual.
@@ -62,6 +63,7 @@ Changed-method generation supports adaptive concurrency:
 
 ```bash
 testwizz generate . --since main --all-changed --max-workers 4 --debug
+testwizz generate . --since main --all-changed --resume --max-workers 2
 testwizz bootstrap . --all --generate-only --debug
 ```
 
@@ -70,6 +72,7 @@ testwizz bootstrap . --all --generate-only --debug
 - `bootstrap --all` uses adaptive concurrent generation with shared Roslyn and model clients; container test execution and checkpoint writes remain serialized.
 - `--debug` prints proposed C# test files to stderr, preserving JSON stdout. Generated code may contain confidential repository details; only enable it in trusted terminals or controlled logs. Debug output is grouped by target in concurrent batches.
 - Per-target elapsed seconds and each wave's throughput are reported for performance diagnosis. Proposals are still review-first and are not automatically applied.
+- **Smart Resume**: All three generation batches (`bootstrap --all`, `generate --all-changed`, `journey-draft --plan-id`) save atomic external checkpoints **after every completed target**, including generated-but-not-yet-tested bootstrap proposals. Restart the same command with `--resume` and the same `--out`; intact outputs are reused without repeating successful LLM work. Failed/pending work is retried. Changed source code, project scope, ADO plan/links, UI snapshot or generation-relevant, non-secret model settings invalidate the relevant checkpoint. Changed input raises `bootstrap.changed` for Bootstrap or `resume.changed` for the other batches, instead of silently mixing runs. Checkpoint files: `bootstrap-checkpoint.json`, `generate-checkpoint.json`, `journey-draft-plan-<id>-checkpoint.json`. In-flight model requests cannot be resumed mid-token.
 
 ## Initial repository baseline (experimental)
 
@@ -77,12 +80,12 @@ testwizz bootstrap . --all --generate-only --debug
 testwizz bootstrap . --all --review              # discover, generate and run eligible C# methods
 testwizz bootstrap . --all --generate-only      # generate proposals without containers
 testwizz bootstrap . --all --format json        # one aggregate JSON object on stdout
-testwizz bootstrap . --all --resume             # resume an interrupted scan
+testwizz bootstrap . --all --review --max-workers 2 --resume  # resume the same scan
 ```
 
 Bootstrap discovers public/internal/protected-internal C# methods with bodies, using overload-safe documentation IDs; tests and ignored files are excluded. **Generation uses bounded adaptive parallel waves**; container execution and checkpoint writes remain serialized. Progress is written to stderr (optionally as `--progress-jsonl`), and per-target generation/run outcomes are recorded. Proposals stay **outside** the repository and are **not applied automatically**. Generation requires a configured local model; running requires Docker/Podman.
 
-**Bootstrap limitations:** C#/xUnit only; no Vue bootstrap, mid-request AI state recovery, or automatic application. `--resume` reuses successfully completed targets from a matching checkpoint. The focused resume/failure-isolation regression is still open ([#27](https://github.com/mycaravam-crypto/testwizz/issues/27)). Target count is not a coverage guarantee; inferred expectations require review.
+**Bootstrap limitations:** C#/xUnit only; no Vue bootstrap, mid-request AI state recovery, or automatic application. `--resume` reuses verified completed targets and pending generated proposals from a matching checkpoint; failed executions are rerun without another model request. Target count is not a coverage guarantee; inferred expectations require review.
 
 
 ## Minimal UI test proposals (experimental)
