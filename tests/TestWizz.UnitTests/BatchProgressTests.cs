@@ -139,4 +139,31 @@ public sealed class BatchProgressTests
         }
         Assert.Contains("interrupted at 2/5", output.ToString(), StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void FailureLines_KeepReasonAndPathButStayBoundedAndSanitized()
+    {
+        using var output = new StringWriter();
+        var path = "/tmp/out/" + new string('p', 300);
+        using (var progress = new BatchProgress(output, "bootstrap", interactive: false))
+        {
+            progress.Failure($"generation failed for M:A.B: validation.unknown-member: \u001b[31mNo member · proposal {path}");
+            progress.Failure(new string('x', 5000));
+        }
+
+        var lines = output.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Contains(path, lines[0], StringComparison.Ordinal);
+        Assert.DoesNotContain('\u001b', lines[0]);
+        Assert.True(lines[1].Length < 1300);
+    }
+
+    [Fact]
+    public void FailureLines_AreSilentInJsonlMode()
+    {
+        using var output = new StringWriter();
+        using (var progress = new BatchProgress(output, "bootstrap", interactive: false, quiet: true))
+            progress.Failure("generation failed");
+
+        Assert.Empty(output.ToString());
+    }
 }

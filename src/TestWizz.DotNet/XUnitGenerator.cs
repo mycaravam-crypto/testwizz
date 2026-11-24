@@ -73,7 +73,16 @@ public static class XUnitGenerator
         user.Append("Assertions: ").Append(Clean(conventions.AssertionLibrary ?? "xUnit Assert")).Append('\n');
         user.Append("Global usings already present: ")
             .Append(conventions.ImplicitUsings ? "SDK implicit usings (System, System.Linq, System.Threading.Tasks, ...)" : "none")
-            .Append(conventions.XunitGlobalUsing ? "; Xunit" : "").Append('\n');
+            .Append(conventions.XunitGlobalUsing ? "; Xunit" : "");
+        const string Prefix = "global using ";
+        // GlobalUsings is settable by callers; list only directives in the expected shape, never slice blindly.
+        foreach (var directive in conventions.GlobalUsings.Where(d => d != "global using Xunit;"
+                     && d.StartsWith(Prefix, StringComparison.Ordinal) && d.Length > Prefix.Length))
+        {
+            user.Append("; ").Append(Clean(directive[Prefix.Length..].TrimEnd(';').Trim()));
+        }
+
+        user.Append('\n');
         user.Append("Test naming pattern: ").Append(conventions.NamingPattern);
         if (conventions.ExampleTestNames.Count > 0)
         {

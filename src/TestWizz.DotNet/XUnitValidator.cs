@@ -10,6 +10,10 @@ namespace TestWizz.DotNet;
 /// <c>[Trait("Scenario", "Sn")]</c> link on every test, plan coverage, and calls to members or constructors of
 /// repository types that do not exist. Package types (xUnit, mocking, assertions) are not resolvable offline, so only
 /// repository types are checked; extension methods of the detected mocking and assertion libraries are allowed.
+/// The validation compilation carries the test project's global usings, so reduced (<c>value.Ext()</c>) and static
+/// (<c>Extensions.Ext(value)</c>) extension calls bind exactly as in the real build, including overloads, generic
+/// inference, optional and named parameters and receiver conversions. A call that only fails because the extension's
+/// namespace is not imported is reported as <c>missing-using</c>; an incompatible receiver as <c>receiver-mismatch</c>.
 /// </summary>
 public static class XUnitValidator
 {
@@ -42,6 +46,7 @@ public static class XUnitValidator
         ["CS1739"] = "signature-mismatch",
         ["CS0122"] = "inaccessible-member",
         ["CS0200"] = "read-only-member",
+        ["CS1929"] = "receiver-mismatch",
     };
 
     public static (IReadOnlyList<GeneratedTest> Tests, IReadOnlyList<GenerationFinding> Findings) Validate(
@@ -101,9 +106,15 @@ public static class XUnitValidator
 
     private static IEnumerable<GenerationFinding> ApiFindings(RoslynContextProvider provider, SyntaxTree tree, XUnitConventions conventions)
     {
-        var support = PackageStubs.For(conventions.MockingLibrary)
+        // The test project's own <Using> items are global usings of the real build; without them an extension method
+        // in an imported namespace looks missing, and for an enum receiver Roslyn then binds System.Enum.GetName(...)
+        // and reports a misleading "No overload ... takes 0 arguments" (CS1501).
+        var globalUsings = conventions.GlobalUsings
             .Append(conventions.XunitGlobalUsing ? "global using Xunit;" : "")
-            .Select(text => CSharpSyntaxTree.ParseText(text, ParseOptions));
+            .Distinct(StringComparer.Ordinal);
+        var support = PackageStubs.For(conventions.MockingLibrary)
+            .Select(text => CSharpSyntaxTree.ParseText(text, ParseOptions))
+            .Append(GlobalUsingTree(globalUsings));
         var compilation = provider.Compilation.AddSyntaxTrees(support.Prepend(tree));
         var model = compilation.GetSemanticModel(tree);
         var allowed = new HashSet<string>(
@@ -119,7 +130,25 @@ public static class XUnitValidator
             }
 
             var node = tree.GetRoot().FindNode(diagnostic.Location.SourceSpan, getInnermostNodeForTie: true);
-            if (node.FirstAncestorOrSelf<UsingDirectiveSyntax>() is not null || !InvolvesRepositoryType(provider, model, node))
+            if (node.FirstAncestorOrSelf<UsingDirectiveSyntax>() is not null)
+            {
+                continue;
+            }
+
+            if (code is "unknown-member" or "signature-mismatch" or "receiver-mismatch"
+                && MissingExtensionImport(provider, compilation, model, node) is { } missing)
+            {
+                if (seen.Add((missing, Line(diagnostic.Location))))
+                {
+                    yield return GenerationFinding.Error("missing-using", missing, Line(diagnostic.Location));
+                }
+
+                continue;
+            }
+
+            if (code == "receiver-mismatch"
+                ? !IsRepositoryExtensionName(provider, compilation, node)
+                : !InvolvesRepositoryType(provider, model, node))
             {
                 continue;
             }
@@ -143,6 +172,90 @@ public static class XUnitValidator
             }
         }
     }
+
+    /// <summary>
+    /// One syntax tree holding only well-formed <c>global using</c> directives. Each directive is parsed on its own and
+    /// kept only when it is exactly one global using directive with no other members, attributes, trivia-hidden code
+    /// or diagnostics, so repository-derived text can never add declarations to the validation compilation. The tree
+    /// is built from the parsed nodes, not by concatenating text. The compilation is only analyzed, never emitted.
+    /// </summary>
+    internal static SyntaxTree GlobalUsingTree(IEnumerable<string> directives)
+    {
+        var usings = new List<UsingDirectiveSyntax>();
+        foreach (var directive in directives)
+        {
+            if (string.IsNullOrWhiteSpace(directive) || directive.Length > 512)
+            {
+                continue;
+            }
+
+            var unit = SyntaxFactory.ParseCompilationUnit(directive, options: ParseOptions);
+            if (unit.ContainsDiagnostics || unit.Members.Count != 0 || unit.AttributeLists.Count != 0
+                || unit.Externs.Count != 0 || unit.Usings is not [{ GlobalKeyword.RawKind: (int)SyntaxKind.GlobalKeyword } single]
+                || single.ToFullString().Trim() != directive.Trim()
+                || single.DescendantTrivia().Any(t => !t.IsKind(SyntaxKind.WhitespaceTrivia) && !t.IsKind(SyntaxKind.EndOfLineTrivia)))
+            {
+                continue;
+            }
+
+            usings.Add(single.WithoutTrivia());
+        }
+
+        return CSharpSyntaxTree.Create(SyntaxFactory.CompilationUnit().WithUsings(SyntaxFactory.List(usings)).NormalizeWhitespace(),
+            ParseOptions, path: "<testwizz-global-usings>");
+    }
+
+    /// <summary>
+    /// For a failing <c>receiver.Name(...)</c> call: a repository extension method named <c>Name</c> that accepts the
+    /// receiver but lives in a namespace the test file does not import. The call is still invalid (the real build fails
+    /// too), but the finding names the missing <c>using</c> instead of Roslyn's fallback diagnostic, which for an enum
+    /// receiver is the unrelated <c>System.Enum.GetName</c> overload error.
+    /// </summary>
+    private static string? MissingExtensionImport(RoslynContextProvider provider, Compilation compilation, SemanticModel model, SyntaxNode node)
+    {
+        if (node.FirstAncestorOrSelf<MemberAccessExpressionSyntax>() is not { Parent: InvocationExpressionSyntax } access
+            || model.GetTypeInfo(access.Expression).Type is not { TypeKind: not TypeKind.Error } receiver)
+        {
+            return null;
+        }
+
+        var name = access.Name.Identifier.Text;
+        var position = access.SpanStart;
+        var visible = model.LookupSymbols(position, receiver, name, includeReducedExtensionMethods: true)
+            .OfType<IMethodSymbol>()
+            .Select(m => (m.ReducedFrom ?? m).OriginalDefinition)
+            .ToHashSet(SymbolEqualityComparer.Default);
+        var namespaces = compilation.GetSymbolsWithName(name, SymbolFilter.Member)
+            .OfType<IMethodSymbol>()
+            .Where(m => m.IsExtensionMethod && provider.IsRepositoryType(m.ContainingType)
+                && !visible.Contains(m.OriginalDefinition)
+                && model.IsAccessible(position, m)
+                && m.ReduceExtensionMethod(receiver) is not null)
+            .Select(m => m.ContainingNamespace)
+            .Where(ns => ns is { IsGlobalNamespace: false })
+            .Select(ns => ns.ToDisplayString())
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+        if (namespaces.Count == 0)
+        {
+            return null;
+        }
+
+        var receiverName = receiver.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
+        return $"'{name}' is an extension method for {receiverName} in namespace {string.Join(" or ", namespaces.Select(ns => $"'{ns}'"))}, "
+            + $"which the test file does not import; add 'using {namespaces[0]};'.";
+    }
+
+    /// <summary>
+    /// CS1929 is reported on the receiver and exposes no candidate symbols: true when the member accessed on it names a
+    /// repository extension method, i.e. the receiver is incompatible with a repository API.
+    /// </summary>
+    private static bool IsRepositoryExtensionName(RoslynContextProvider provider, Compilation compilation, SyntaxNode receiver) =>
+        receiver.FirstAncestorOrSelf<MemberAccessExpressionSyntax>() is { } access
+        && compilation.GetSymbolsWithName(access.Name.Identifier.Text, SymbolFilter.Member)
+            .OfType<IMethodSymbol>()
+            .Any(m => m.IsExtensionMethod && provider.IsRepositoryType(m.ContainingType));
 
     /// <summary>True when the failing member access, call or construction targets a type declared in the repository.</summary>
     private static bool InvolvesRepositoryType(RoslynContextProvider provider, SemanticModel model, SyntaxNode node)
