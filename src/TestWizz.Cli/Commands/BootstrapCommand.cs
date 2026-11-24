@@ -361,7 +361,7 @@ public static class BootstrapCommand
         void Add(string value) => hash.AppendData(Encoding.UTF8.GetBytes(value + "\n"));
         Add(Path.GetFullPath(root));
         Add(CliApp.Version);
-        Add(ConfigJson.ToJson(config).ToJsonString());
+        Add(BatchResume.PublicConfigFingerprint(config));
         Add(generateOnly.ToString());
         foreach (var project in (includedProjects ?? new HashSet<string>(StringComparer.Ordinal)).Order(StringComparer.Ordinal)) Add(project);
         foreach (var target in targets) Add(target);

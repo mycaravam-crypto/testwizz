@@ -230,7 +230,7 @@ public static class GenerateCommand
         {
             "testwizz.generate-batch/v2", CliApp.Version, Path.GetFullPath(root),
             Path.GetFullPath(output), since, minRisk.ToString(CultureInfo.InvariantCulture),
-            ConfigJson.ToJson(config).ToJsonString(), context.Has(AiPlanOption).ToString(),
+            BatchResume.PublicConfigFingerprint(config), context.Has(AiPlanOption).ToString(),
             context.Options.GetValueOrDefault("--max-chars") ?? "",
         };
         fingerprintParts.AddRange(ranked.Select(row => row.Target + ":" + row.Risk.ToString(CultureInfo.InvariantCulture)));
@@ -376,9 +376,9 @@ public static class GenerateCommand
                 ["errorCode"] = item.ErrorCode,
                 ["seconds"] = item.Seconds,
             });
-            markdown.Append("| ").Append(item.Target)
+            markdown.Append("| ").Append(item.Target.Replace("|", "\\|", StringComparison.Ordinal))
                 .Append(" | ").Append(item.Status).Append(" | ")
-                .Append(item.Proposal ?? "—")
+                .Append((item.Proposal ?? "—").Replace("|", "\\|", StringComparison.Ordinal))
                 .Append(" |\n");
         }
         markdown.Append(CultureInfo.InvariantCulture,

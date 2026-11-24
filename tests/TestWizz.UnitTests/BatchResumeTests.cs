@@ -95,6 +95,21 @@ public sealed class BatchResumeTests
     }
 
     [Fact]
+    public void ConfigFingerprint_ExcludesAuthorizationVariableNames()
+    {
+        var config = TestWizz.Core.Configuration.TestWizzConfig.Default;
+        var authChanged = config with
+        {
+            Ai = config.Ai with { ApiKeyEnv = "SENSITIVE_AUTH_ENV_NAME" },
+        };
+        Assert.Equal(BatchResume.PublicConfigFingerprint(config),
+            BatchResume.PublicConfigFingerprint(authChanged));
+        var modelChanged = config with { Ai = config.Ai with { Model = "different-model" } };
+        Assert.NotEqual(BatchResume.PublicConfigFingerprint(config),
+            BatchResume.PublicConfigFingerprint(modelChanged));
+    }
+
+    [Fact]
     public void AdoFingerprint_IgnoresOnlyVolatileGeneratedAt()
     {
         const string first = """

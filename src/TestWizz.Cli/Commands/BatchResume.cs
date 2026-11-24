@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
 using TestWizz.Core.Proposals;
+using TestWizz.Core.Configuration;
 
 namespace TestWizz.Cli.Commands;
 
@@ -22,6 +23,26 @@ internal static class BatchResume
         }
         return Convert.ToHexStringLower(sha.GetHashAndReset());
     }
+
+    /// <summary>
+    /// Fingerprints only allowlisted generation settings, never credential values, URI user-info,
+    /// query strings or environment-variable contents. The key environment variable name
+    /// controls transport authorization, not the semantics of generated tests.
+    /// </summary>
+    public static string PublicConfigFingerprint(TestWizzConfig config) => Fingerprint(new[]
+    {
+        config.Ai.Provider.ToString(),
+        config.Ai.Endpoint.Scheme,
+        config.Ai.Endpoint.Host,
+        config.Ai.Endpoint.Port.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        config.Ai.Endpoint.AbsolutePath,
+        config.Ai.Model,
+        config.Ai.TimeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        config.Ai.MaxContextTokens.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        config.Run.Runtime.ToString(),
+        config.Run.MaxRepairAttempts.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        config.Output,
+    });
 
     /// <summary>ADO trace exports carry a new generatedAt value on every read.</summary>
     public static string StableAdoJson(string json)

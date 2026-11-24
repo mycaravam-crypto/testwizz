@@ -131,7 +131,7 @@ public static class JourneyDraftBatch
         {
             "journey-draft-batch/v2", CliApp.Version, Path.GetFullPath(root), Path.GetFullPath(output),
             planId.ToString(CultureInfo.InvariantCulture), selection.Project, area, url!,
-            ConfigJson.ToJson(config).ToJsonString(),
+            BatchResume.PublicConfigFingerprint(config),
             BatchResume.StableAdoJson(planJson), BatchResume.StableAdoJson(traceJson),
             snapshot ?? "",
         });
