@@ -92,10 +92,13 @@ public static class ApplyCommand
         var text = new StringBuilder(allowUnverified ? "Batch apply (unverified proposals allowed):\n" : "Batch apply (verified proposals only):\n");
 
         // Stable order makes the first proposal win when two proposals target the same file.
-        foreach (var directory in Directory.EnumerateDirectories(output).OrderBy(p => p, StringComparer.Ordinal))
+        var directories = Directory.EnumerateDirectories(output)
+            .Where(p => File.Exists(Path.Combine(p, ProposalBundle.ManifestFile)))
+            .OrderBy(p => p, StringComparer.Ordinal).ToArray();
+        using var progress = BatchProgress.For(context, "apply");
+        progress.Stage("apply", directories.Length, detail: "Checking proposal bundles");
+        foreach (var directory in directories)
         {
-            if (!File.Exists(Path.Combine(directory, ProposalBundle.ManifestFile)))
-                continue;
             var id = Path.GetFileName(directory);
             string status;
             string? reason = null;
@@ -147,8 +150,10 @@ public static class ApplyCommand
             text.Append("  ").Append(status).Append(": ").Append(id);
             if (reason is not null) text.Append(" (").Append(reason).Append(')');
             text.Append('\n');
+            progress.Update(entries.Count, id, conflicted, skipped);
         }
 
+        progress.Finish(entries.Count, conflicted, skipped, $"{applied} applied");
         text.Append(System.Globalization.CultureInfo.InvariantCulture, $"Summary: {applied} applied, {skipped} skipped, {conflicted} conflicted; {filesApplied} files added.\n");
         text.Append("Nothing was committed. Review with 'git status' and 'git diff'.\n");
         context.Output.Result("apply", new JsonObject

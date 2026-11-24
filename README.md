@@ -74,6 +74,12 @@ testwizz bootstrap . --all --generate-only --debug
 - Per-target elapsed seconds and each wave's throughput are reported for performance diagnosis. Proposals are still review-first and are not automatically applied.
 - **Smart Resume**: All three generation batches (`bootstrap --all`, `generate --all-changed`, `journey-draft --plan-id`) save atomic external checkpoints **after every completed target**, including generated-but-not-yet-tested bootstrap proposals. Restart the same command with `--resume` and the same `--out`; intact outputs are reused without repeating successful LLM work. Failed/pending work is retried. Changed source code, project scope, ADO plan/links, UI snapshot or generation-relevant, non-secret model settings invalidate the relevant checkpoint. Changed input raises `bootstrap.changed` for Bootstrap or `resume.changed` for the other batches, instead of silently mixing runs. Checkpoint files: `bootstrap-checkpoint.json`, `generate-checkpoint.json`, `journey-draft-plan-<id>-checkpoint.json`. In-flight model requests cannot be resumed mid-token.
 
+## Terminal progress
+
+The batch commands `bootstrap --all`, `generate --all-changed`, `journey-draft --plan-id`, and `apply --all` share one progress display. Interactive terminals show an updating Unicode bar with the current phase, completed/total counts, elapsed time, active workers, failures, and current target. Source discovery and ADO/browser preparation use indeterminate phases rather than misleading percentages. `--debug` still prints complete generated test source.
+
+Redirected stderr, CI, and `TERM=dumb` produce plain, throttled milestone lines without ANSI cursor controls or colors. `NO_COLOR=1` or `CLICOLOR=0` disables colors while retaining interactive updates. `--format json` still writes exactly one JSON result to stdout; progress remains stderr-only. `bootstrap --progress-jsonl` keeps its existing versioned JSONL events on stderr instead of drawing a bar. Percentages represent completed work items, not estimated AI response progress. Rendering does not change checkpoint, retry, or exit-code behavior.
+
 ## Initial repository baseline (experimental)
 
 ```bash
