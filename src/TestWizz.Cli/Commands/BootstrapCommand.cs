@@ -205,6 +205,7 @@ public static class BootstrapCommand
             var execution = "not-run";
             var proposal = item.Proposal;
             var error = item.Error;
+            using var runDiagnostics = new StringWriter(CultureInfo.InvariantCulture);
             if (generation == "ok" && proposal is not null && !context.Has("--generate-only"))
             {
                 if (runtimeProblem is not null)
@@ -221,7 +222,7 @@ public static class BootstrapCommand
                         {
                             Command = RunCommand.Definition,
                             Options = RunOptions(context, proposal),
-                            Output = new CliOutput(runOutput, TextWriter.Null, OutputFormat.Json),
+                            Output = new CliOutput(runOutput, runDiagnostics, OutputFormat.Json),
                             SharedRuntime = checkedRuntime,
                         };
                         var runExit = RunCommand.Definition.Handler(runContext);
@@ -235,7 +236,8 @@ public static class BootstrapCommand
                 }
             }
             else if (generation == "error") execution = "error";
-            return new BootstrapVerified(target, generation, execution, proposal, error);
+            return new BootstrapVerified(target, generation, execution, proposal, error,
+                runDiagnostics.ToString());
         }
 
         var verifiedResults = new Dictionary<string, BootstrapVerified>(StringComparer.Ordinal);
@@ -247,6 +249,7 @@ public static class BootstrapCommand
             (target, result, active) =>
             {
                 verifiedResults[target] = result;
+                if (result.Diagnostics.Length > 0) progress.Diagnostics(result.Diagnostics);
                 var finalized = new JsonObject
                 {
                     ["target"] = target,
@@ -367,7 +370,8 @@ public static class BootstrapCommand
     }
 
     private sealed record BootstrapItem(string Target, string Generation, string? Proposal, string? Error, string Diagnostics, double Seconds);
-    private sealed record BootstrapVerified(string Target, string Generation, string Execution, string? Proposal, string? Error);
+    private sealed record BootstrapVerified(string Target, string Generation, string Execution,
+        string? Proposal, string? Error, string Diagnostics);
 
     private static BootstrapItem GenerateTarget(CommandContext context, RoslynContextProvider provider, ModelClient model, string target)
     {
