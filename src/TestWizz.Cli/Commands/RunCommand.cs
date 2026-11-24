@@ -63,8 +63,11 @@ public static class RunCommand
                 throw new CliException("run.unsupported_stack", $"Running '{proposal.Stack}' proposals is not supported yet.");
             }
 
-            var runtime = context.Runtime(config.Run.Runtime);
-            if (runtime.CheckAsync(context.CancellationToken).GetAwaiter().GetResult() is { } problem)
+            // Bootstrap already checked this immutable runtime selection once for the batch.
+            // Standalone testwizz run always performs the normal preflight check.
+            var runtime = context.SharedRuntime ?? context.Runtime(config.Run.Runtime);
+            if (context.SharedRuntime is null &&
+                runtime.CheckAsync(context.CancellationToken).GetAwaiter().GetResult() is { } problem)
             {
                 throw new CliException(
                     "run.no_container_runtime",

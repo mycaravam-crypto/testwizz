@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json.Nodes;
 using TestWizz.AI;
 using TestWizz.Cli;
+using TestWizz.Cli.Commands;
 using TestWizz.Core.Configuration;
 using TestWizz.Core.Generation;
 using TestWizz.Core.Planning;
@@ -107,6 +108,29 @@ public sealed class RunCommandTests : IDisposable
 
     private string[] Snapshot() =>
         [.. Directory.EnumerateFiles(_fixture, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal).Select(p => $"{p}:{File.ReadAllText(p)}")];
+
+    [Fact]
+    public void PrecheckedBatchRuntime_ReusesRuntimeWithoutRepeatDaemonPreflight()
+    {
+        var bundle = Bundles.Create(_fixture, _proposals, CannedTests.Divide);
+        Passing();
+        _runtime.Unavailable = "This runtime would fail a fresh preflight";
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+        var context = new CommandContext(
+            RunCommand.Definition,
+            [],
+            new Dictionary<string, string?> { ["--proposal"] = Path.GetFileName(bundle) },
+            new CliOutput(stdout, stderr, OutputFormat.Json),
+            _fixture,
+            _ => null,
+            TestContext.Current.CancellationToken,
+            SharedRuntime: _runtime);
+        var code = RunCommand.Definition.Handler(context);
+        Assert.Equal(ExitCodes.Success, code);
+        Assert.Equal("passed", (string?)JsonNode.Parse(stdout.ToString())?["result"]?["status"]);
+        Assert.Equal(3, _runtime.Runs.Count);
+    }
 
     [Fact]
     public void PassingRun_IsolatesPhasesAndRecordsResult()

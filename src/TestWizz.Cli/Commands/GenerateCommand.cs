@@ -40,8 +40,8 @@ public static class GenerateCommand
             new(AllChangedOption, "Generate proposals for up to 20 changed C# methods and produce one CI summary."),
             new(MinRiskOption, "Minimum deterministic method-risk score (0-100).", "score"),
             new(DebugOption, "Print each generated test source to stderr (may contain sensitive source code)."),
-            new(MaxWorkersOption, "Maximum adaptive LLM workers for --all-changed (1-8; default 4).", "n"),
-            new(ContinueOnErrorOption, "Continue --all-changed after a failed target (default: stop after the first failed wave)."),
+            new(MaxWorkersOption, "Model concurrency (1-8); default adaptive 1..4, explicit N uses N.", "n"),
+            new(ContinueOnErrorOption, "Continue --all-changed after a failed target; in-flight tasks finish (default: stop dispatching new tasks)."),
             new(ResumeOption, "Resume a matching changed-method batch without repeating verified proposals."),
         ],
         MaxArguments: 1,
@@ -274,20 +274,14 @@ public static class GenerateCommand
         progress.Stage("generate", ranked.Count, results.Count,
             $"{pending.Length} pending · {results.Count} restored");
         var continueOnError = context.Has(ContinueOnErrorOption);
+        var adaptiveGeneration = new AdaptiveWorkerLimit(limit);
+        var fixedGenerationWorkers = context.Has(MaxWorkersOption);
+        var generationClock = Stopwatch.StartNew();
         var aborted = false;
-        var workers = 1;
-        double priorThroughput = 0;
-        var position = 0;
-        while (position < pending.Length)
+        var batchFailures = 0;
+        BatchItem RunOne(ChangedCode.RankedMethod method)
         {
-            context.CancellationToken.ThrowIfCancellationRequested();
-            var count = Math.Min(workers, pending.Length - position);
-            var start = position;
-            var stopwatch = Stopwatch.StartNew();
-            progress.Update(results.Count, pending[start].Target, active: count);
-            var tasks = Enumerable.Range(start, count).Select(index => Task.Run(() =>
-            {
-                var target = pending[index].Target;
+            var target = method.Target;
                 using var stdout = new StringWriter(CultureInfo.InvariantCulture);
                 using var stderr = new StringWriter(CultureInfo.InvariantCulture);
                 var options = context.Options
@@ -320,46 +314,30 @@ public static class GenerateCommand
                     return new BatchItem(target, "error", null, ex.Code, stderr.ToString(),
                         timer.Elapsed.TotalSeconds, null);
                 }
-            }, context.CancellationToken)).ToList();
-            var failedWave = false;
-            while (tasks.Count > 0)
-            {
-                context.CancellationToken.ThrowIfCancellationRequested();
-                var completion = Task.WhenAny(tasks);
-                var heartbeat = Task.Delay(TimeSpan.FromSeconds(15), context.CancellationToken);
-                if (Task.WhenAny(completion, heartbeat).GetAwaiter().GetResult() == heartbeat)
-                {
-                    progress.Pulse($"Waiting for {tasks.Count} model request(s)", tasks.Count);
-                    continue;
-                }
-                var task = completion.GetAwaiter().GetResult();
-                tasks.Remove(task);
-                var item = task.GetAwaiter().GetResult();
-                results[item.Target] = item;
-                // A successful completion is durable even if another worker is cancelled.
-                Save();
-                failedWave |= item.Status != "ok";
-                if (item.DebugText.Length > 0) progress.Diagnostics(item.DebugText);
-                progress.Update(results.Count, item.Target,
-                    failed: results.Values.Count(entry => entry.Status is "failed" or "error"), active: tasks.Count);
-            }
-            stopwatch.Stop();
-            position += count;
-            if (!continueOnError && failedWave)
-            {
-                aborted = position < pending.Length;
-                progress.Note($"Stopped after failed wave; {pending.Length - position} target(s) not started. " +
-                    "Use --continue-on-error to process all.");
-                break;
-            }
-            var throughput = count / Math.Max(0.001, stopwatch.Elapsed.TotalSeconds);
-            progress.Pulse($"{throughput:F2} targets/s · {workers} worker(s)");
-            if (workers > 1 && priorThroughput > 0 && throughput < priorThroughput * 0.9)
-                workers = Math.Max(1, workers - 1);
-            else if (workers < limit && position < pending.Length)
-                workers++;
-            priorThroughput = throughput;
         }
+        var queueResult = BatchWorkQueue.RunAsync(
+            pending,
+            limit,
+            (method, _) => Task.FromResult(RunOne(method)),
+            (method, item, active) =>
+            {
+                results[item.Target] = item;
+                // Save each completion before dispatching the next model request.
+                Save();
+                if (item.Status is "failed" or "error") batchFailures++;
+                if (!fixedGenerationWorkers) adaptiveGeneration.Completed(generationClock.Elapsed);
+                if (item.DebugText.Length > 0) progress.Diagnostics(item.DebugText);
+                progress.Update(results.Count, item.Target, failed: batchFailures, active: active);
+            },
+            item => !continueOnError && item.Status != "ok",
+            (done, active) => progress.Pulse($"Waiting for {active} model request(s)", active),
+            context.CancellationToken,
+            () => fixedGenerationWorkers ? limit : adaptiveGeneration.Current).GetAwaiter().GetResult();
+        aborted = queueResult.Stopped && queueResult.Started < pending.Length;
+        if (aborted)
+            progress.Note($"Stopped after a failed target; {pending.Length - queueResult.Started} target(s) not started. " +
+                "Use --continue-on-error to process all.");
+
         var rows = new JsonArray();
         var markdown = new StringBuilder("# TestWizz changed-code generation\n\n| Target | Status | Proposal |\n|---|---|---|\n");
         var failed = 0;

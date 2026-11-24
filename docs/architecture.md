@@ -28,3 +28,7 @@ Dependency direction: CLI orchestrates adapters and Core; adapters depend on Cor
 ## Future Vue integration
 
 Move the Vue context and scenario providers behind the `TestWizz.Vue` boundary while retaining CLI compatibility and existing golden fixture behavior. AI-powered Vue/Vitest generation is not implemented yet.
+
+## Bounded batch execution
+
+Model requests use a replenished bounded queue, independent container verification uses `--verify-workers` and each test still has a separate ephemeral workspace. Checkpoints remain coordinator-owned.

@@ -39,6 +39,18 @@ public sealed class CliAppTests : IDisposable
         Assert.DoesNotContain("Unhandled exception", stderr.ToString(), StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("0")]
+    [InlineData("5")]
+    [InlineData("invalid")]
+    public void Bootstrap_RejectsUnsupportedParallelVerificationLimits(string workers)
+    {
+        var (exit, stdout, _) = Run("bootstrap", "--all", "--review",
+            "--verify-workers", workers, "--format", "json");
+        Assert.Equal(ExitCodes.Error, exit);
+        Assert.Equal("usage", (string)ParseJson(stdout)["error"]!["code"]!);
+    }
+
     [Fact]
     public void Bootstrap_RequiresExplicitAllFlag()
     {

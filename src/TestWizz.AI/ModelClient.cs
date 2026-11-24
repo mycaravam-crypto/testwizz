@@ -26,6 +26,9 @@ public abstract class ModelClient : IDisposable
     private readonly HttpClient _http;
     private readonly string? _apiKey;
     private readonly TimeSpan _timeout;
+    private readonly SemaphoreSlim _digestGate = new(1, 1);
+    private volatile bool _digestCached;
+    private string? _digest;
 
     private protected ModelClient(AiSettings settings, string? apiKey, HttpMessageHandler handler)
     {
@@ -71,13 +74,31 @@ public abstract class ModelClient : IDisposable
     /// <summary>Digest of the configured model for provenance, or null when the server does not report one.</summary>
     public async Task<string?> ModelDigestAsync(CancellationToken cancellationToken)
     {
-        var models = await ListModelsAsync(cancellationToken).ConfigureAwait(false);
-        return models?.FirstOrDefault(m => m.Name == Settings.Model || m.Name == Settings.Model + ":latest")?.Digest;
+        // Model provenance is fixed for this client / batch. Avoid another /api/tags or
+        // /models call for every generated method, while coalescing parallel callers.
+        if (_digestCached) return _digest;
+        await _digestGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (!_digestCached)
+            {
+                var models = await ListModelsAsync(cancellationToken).ConfigureAwait(false);
+                _digest = models?.FirstOrDefault(
+                    m => m.Name == Settings.Model || m.Name == Settings.Model + ":latest")?.Digest;
+                _digestCached = true; // Null from an unsupported listing is also cacheable.
+            }
+            return _digest;
+        }
+        finally
+        {
+            _digestGate.Release();
+        }
     }
 
     public void Dispose()
     {
         _http.Dispose();
+        _digestGate.Dispose();
         GC.SuppressFinalize(this);
     }
 
