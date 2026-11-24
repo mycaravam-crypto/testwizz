@@ -23,6 +23,7 @@ public static class GenerateCommand
     private const string DebugOption = "--debug";
     private const string MaxWorkersOption = "--max-workers";
     private const string ContinueOnErrorOption = "--continue-on-error";
+    private const string ResumeOption = "--resume";
     private const int MaxBatchTargets = 20;
 
     public static CommandDefinition Definition { get; } = new(
@@ -41,6 +42,7 @@ public static class GenerateCommand
             new(DebugOption, "Print each generated test source to stderr (may contain sensitive source code)."),
             new(MaxWorkersOption, "Maximum adaptive LLM workers for --all-changed (1-8; default 4).", "n"),
             new(ContinueOnErrorOption, "Continue --all-changed after a failed target (default: stop after the first failed wave)."),
+            new(ResumeOption, "Resume a matching changed-method batch without repeating verified proposals."),
         ],
         MaxArguments: 1,
         Handler: Run);
@@ -48,6 +50,8 @@ public static class GenerateCommand
     private static int Run(CommandContext context)
     {
         var root = context.PathArgument();
+        if (context.Has(ResumeOption) && (!context.Has(SinceOption) || !context.Has(AllChangedOption)))
+            throw new CliException("usage", "--resume requires --since <ref> --all-changed.");
         if ((context.Has(ListChangedOption) || context.Has(AllChangedOption)) && !context.Has(SinceOption))
             throw new CliException("usage", "--list-changed and --all-changed require --since.");
         if (context.Has(AllChangedOption) && (context.Has(ListChangedOption) || context.Has("--for")))
@@ -200,41 +204,94 @@ public static class GenerateCommand
         return result.IsValid ? ExitCodes.Success : ExitCodes.ValidationFailed;
     }
 
-    private sealed record BatchItem(string Target, string Status, string? Proposal, string? ErrorCode, string DebugText, double Seconds);
+    private sealed record BatchItem(string Target, string Status, string? Proposal,
+        string? ErrorCode, string DebugText, double Seconds, string? ArtifactSha256);
 
     private static int RunBatch(CommandContext context, List<ChangedCode.RankedMethod> ranked, string since, int minRisk)
     {
         if (ranked.Count > MaxBatchTargets)
-            throw new CliException("target.too_many", $"Changed methods: {ranked.Count}; maximum is {MaxBatchTargets}. Narrow the Git comparison.");
+            throw new CliException("target.too_many",
+                $"Changed methods: {ranked.Count}; maximum is {MaxBatchTargets}. Narrow the Git comparison.");
         var limit = 4;
         if (context.Options.TryGetValue(MaxWorkersOption, out var text)
             && (!int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out limit) || limit is < 1 or > 8))
             throw new CliException("usage", "--max-workers must be between 1 and 8.");
         var root = context.PathArgument();
         var config = ConfigCommand.Load(Path.Combine(root, TestWizzConfig.FileName));
+        var output = context.Options.TryGetValue(OutOption, out var outText) && !string.IsNullOrWhiteSpace(outText)
+            ? Path.GetFullPath(outText, context.WorkingDirectory)
+            : Path.GetFullPath(config.Output, root);
+        try { ProposalBundle.EnsureOutsideRepository(root, output); }
+        catch (ProposalException ex) { throw new CliException(ex.Code, ex.Message); }
+        Directory.CreateDirectory(output);
         using var model = ModelClient.Create(config.Ai, context.GetEnvironmentVariable);
         var provider = RoslynContextProvider.Load(root);
-        var results = new List<BatchItem>();
+        var fingerprintParts = new List<string>
+        {
+            "testwizz.generate-batch/v2", CliApp.Version, Path.GetFullPath(root),
+            Path.GetFullPath(output), since, minRisk.ToString(CultureInfo.InvariantCulture),
+            ConfigJson.ToJson(config).ToJsonString(), context.Has(AiPlanOption).ToString(),
+            context.Options.GetValueOrDefault("--max-chars") ?? "",
+        };
+        fingerprintParts.AddRange(ranked.Select(row => row.Target + ":" + row.Risk.ToString(CultureInfo.InvariantCulture)));
+        fingerprintParts.AddRange(provider.SourceHashes.Select(row => row.Path + ":" + row.Sha256));
+        var fingerprint = BatchResume.Fingerprint(fingerprintParts);
+        var checkpointFile = Path.Combine(output, "generate-checkpoint.json");
+        const string schema = "testwizz.generate-checkpoint/v1";
+        var saved = context.Has(ResumeOption)
+            ? BatchResume.Read(checkpointFile, schema, fingerprint) : new JsonArray();
+        var eligible = ranked.Select(row => row.Target).ToHashSet(StringComparer.Ordinal);
+        var results = new Dictionary<string, BatchItem>(StringComparer.Ordinal);
+        foreach (var row in saved.OfType<JsonObject>())
+        {
+            var target = (string?)row["target"];
+            var proposal = (string?)row["proposal"];
+            var digest = (string?)row["artifactSha256"];
+            if (target is null || !eligible.Contains(target) ||
+                (string?)row["status"] != "ok" ||
+                !BatchResume.Intact(root, output,
+                    proposal is null ? null : Path.Combine(proposal, ProposalBundle.ManifestFile), digest))
+                continue;
+            results[target] = new BatchItem(target, "resumed", proposal, null, "", 0, digest);
+        }
+        void Save()
+        {
+            var entries = new JsonArray([.. results.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                .Select(pair => (JsonNode?)new JsonObject
+                {
+                    ["target"] = pair.Key,
+                    ["status"] = pair.Value.Status == "resumed" ? "ok" : pair.Value.Status,
+                    ["proposal"] = pair.Value.Proposal,
+                    ["artifactSha256"] = pair.Value.ArtifactSha256,
+                    ["errorCode"] = pair.Value.ErrorCode,
+                    ["seconds"] = pair.Value.Seconds,
+                })]);
+            BatchResume.Save(checkpointFile, schema, fingerprint, entries);
+        }
+        if (!context.Has(ResumeOption)) Save();
+        var pending = ranked.Where(row => !results.ContainsKey(row.Target)).ToArray();
+        context.Output.Stderr.WriteLine(
+            $"testwizz batch: {ranked.Count} changed method(s), {results.Count} verified from checkpoint, " +
+            $"{pending.Length} pending.");
         var continueOnError = context.Has(ContinueOnErrorOption);
         var aborted = false;
         var workers = 1;
         double priorThroughput = 0;
         var position = 0;
-        while (position < ranked.Count)
+        while (position < pending.Length)
         {
             context.CancellationToken.ThrowIfCancellationRequested();
-            var count = Math.Min(workers, ranked.Count - position);
+            var count = Math.Min(workers, pending.Length - position);
             var start = position;
             var stopwatch = Stopwatch.StartNew();
-            // Execute independent LLM requests concurrently, but share the read-only Roslyn compilation.
-            // Each worker keeps console output private until its complete result has been collected.
             var tasks = Enumerable.Range(start, count).Select(index => Task.Run(() =>
             {
-                var target = ranked[index].Target;
+                var target = pending[index].Target;
                 using var stdout = new StringWriter(CultureInfo.InvariantCulture);
                 using var stderr = new StringWriter(CultureInfo.InvariantCulture);
                 var options = context.Options
-                    .Where(option => option.Key is not (AllChangedOption or SinceOption or MaxWorkersOption or ContinueOnErrorOption))
+                    .Where(option => option.Key is not
+                        (AllChangedOption or SinceOption or MinRiskOption or MaxWorkersOption or ContinueOnErrorOption or ResumeOption))
                     .ToDictionary(option => option.Key, option => option.Value, StringComparer.Ordinal);
                 options["--for"] = target;
                 var inner = context with
@@ -249,76 +306,98 @@ public static class GenerateCommand
                 {
                     var exit = Run(inner);
                     var response = JsonNode.Parse(stdout.ToString())!;
+                    var proposal = (string?)response["result"]?["path"];
+                    var digest = proposal is null ? null
+                        : BatchResume.ShaFile(Path.Combine(proposal, ProposalBundle.ManifestFile));
+                    if (exit == ExitCodes.Success && (proposal is null || digest is null))
+                        throw new CliException("batch.proposal_missing", "Generated bundle manifest is missing.");
                     return new BatchItem(target, exit == ExitCodes.Success ? "ok" : "failed",
-                        (string?)response["result"]?["path"], null, stderr.ToString(), timer.Elapsed.TotalSeconds);
+                        proposal, null, stderr.ToString(), timer.Elapsed.TotalSeconds, digest);
                 }
                 catch (CliException ex)
                 {
-                    return new BatchItem(target, "error", null, ex.Code, stderr.ToString(), timer.Elapsed.TotalSeconds);
+                    return new BatchItem(target, "error", null, ex.Code, stderr.ToString(),
+                        timer.Elapsed.TotalSeconds, null);
                 }
-            }, context.CancellationToken)).ToArray();
-            Task.WhenAll(tasks).GetAwaiter().GetResult();
-            stopwatch.Stop();
-            for (var i = 0; i < tasks.Length; i++)
+            }, context.CancellationToken)).ToList();
+            var failedWave = false;
+            while (tasks.Count > 0)
             {
-                var item = tasks[i].Result;
-                results.Add(item);
-                if (item.DebugText.Length > 0)
-                    context.Output.Stderr.Write(item.DebugText);
-                context.Output.Stderr.WriteLine($"testwizz batch: {start + i + 1}/{ranked.Count} {item.Target}: {item.Status} ({item.Seconds:F1}s)");
-            }
-            position += count;
-            if (!continueOnError && tasks.Any(task => task.Result.Status != "ok"))
-            {
-                aborted = position < ranked.Count;
+                context.CancellationToken.ThrowIfCancellationRequested();
+                var completion = Task.WhenAny(tasks);
+                var heartbeat = Task.Delay(TimeSpan.FromSeconds(15), context.CancellationToken);
+                if (Task.WhenAny(completion, heartbeat).GetAwaiter().GetResult() == heartbeat)
+                {
+                    context.Output.Stderr.WriteLine($"testwizz batch: {results.Count}/{ranked.Count} complete; " +
+                        $"waiting on {tasks.Count} LLM request(s).");
+                    continue;
+                }
+                var task = completion.GetAwaiter().GetResult();
+                tasks.Remove(task);
+                var item = task.GetAwaiter().GetResult();
+                results[item.Target] = item;
+                // A successful completion is durable even if another worker is cancelled.
+                Save();
+                failedWave |= item.Status != "ok";
+                if (item.DebugText.Length > 0) context.Output.Stderr.Write(item.DebugText);
                 context.Output.Stderr.WriteLine(
-                    $"testwizz batch: stopped after validation/generation failure; {ranked.Count - position} targets not started. " +
-                    "Use --continue-on-error to process all targets.");
+                    $"testwizz batch: {results.Count}/{ranked.Count} {item.Target}: {item.Status} ({item.Seconds:F1}s)");
+            }
+            stopwatch.Stop();
+            position += count;
+            if (!continueOnError && failedWave)
+            {
+                aborted = position < pending.Length;
+                context.Output.Stderr.WriteLine(
+                    $"testwizz batch: stopped after failed wave; {pending.Length - position} target(s) not started. " +
+                    "Use --continue-on-error to process all.");
                 break;
             }
             var throughput = count / Math.Max(0.001, stopwatch.Elapsed.TotalSeconds);
             context.Output.Stderr.WriteLine($"testwizz batch: workers={workers}, throughput={throughput:F3} targets/s");
-            // Additive ramp-up with regression backoff: do not increase concurrency when
-            // throughput is below 90% of the preceding wave. No assumption about GPU size.
             if (workers > 1 && priorThroughput > 0 && throughput < priorThroughput * 0.9)
                 workers = Math.Max(1, workers - 1);
-            else if (workers < limit && position < ranked.Count)
+            else if (workers < limit && position < pending.Length)
                 workers++;
             priorThroughput = throughput;
         }
         var rows = new JsonArray();
         var markdown = new StringBuilder("# TestWizz changed-code generation\n\n| Target | Status | Proposal |\n|---|---|---|\n");
         var failed = 0;
-        for (var i = 0; i < results.Count; i++)
+        foreach (var target in ranked)
         {
-            var item = results[i];
-            if (item.Status != "ok") failed++;
+            if (!results.TryGetValue(target.Target, out var item)) continue;
+            if (item.Status is not ("ok" or "resumed")) failed++;
             rows.Add(new JsonObject
             {
                 ["target"] = item.Target,
-                ["risk"] = ranked[i].Risk,
+                ["risk"] = target.Risk,
                 ["status"] = item.Status,
                 ["proposal"] = item.Proposal,
                 ["errorCode"] = item.ErrorCode,
                 ["seconds"] = item.Seconds,
             });
-            markdown.Append("| `").Append(item.Target.Replace("|", "\\|", StringComparison.Ordinal))
-                .Append("` | ").Append(item.Status).Append(" | ")
-                .Append(item.Proposal is null ? "—" : "`" + item.Proposal.Replace("|", "\\|", StringComparison.Ordinal) + "`")
+            markdown.Append("| ").Append(item.Target)
+                .Append(" | ").Append(item.Status).Append(" | ")
+                .Append(item.Proposal ?? "—")
                 .Append(" |\n");
         }
-        markdown.Append(CultureInfo.InvariantCulture, $"\n{results.Count} of {ranked.Count} target(s) processed, {failed} failed; {ranked.Count - results.Count} not started. No repository files were modified.\n");
+        markdown.Append(CultureInfo.InvariantCulture,
+            $"\n{results.Count} of {ranked.Count} target(s) processed, {failed} failed; " +
+            $"{ranked.Count - results.Count} not started. No repository files were modified.\n");
         context.Output.Result("generate", new JsonObject
         {
             ["schema"] = "testwizz.generate-batch/v1",
             ["base"] = since,
             ["total"] = ranked.Count,
             ["processed"] = results.Count,
+            ["resumed"] = results.Values.Count(item => item.Status == "resumed"),
             ["notStarted"] = ranked.Count - results.Count,
             ["aborted"] = aborted,
             ["failed"] = failed,
             ["minRisk"] = minRisk,
             ["maxWorkers"] = limit,
+            ["checkpoint"] = checkpointFile,
             ["items"] = rows,
         }, markdown.ToString(), failed > 0 ? "failed" : "ok");
         return failed > 0 ? ExitCodes.ValidationFailed : ExitCodes.Success;

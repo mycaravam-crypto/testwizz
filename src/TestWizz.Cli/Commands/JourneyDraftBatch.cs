@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using TestWizz.AI;
 using TestWizz.Core.Configuration;
 using TestWizz.Core.Proposals;
@@ -75,6 +76,8 @@ public static class JourneyDraftBatch
             throw new CliException("usage", "--plan-id must be a positive integer.");
 
         var listOnly = context.Has("--list-only");
+        if (listOnly && context.Has("--resume"))
+            throw new CliException("usage", "--resume cannot be combined with --list-only.");
         var url = context.Options.GetValueOrDefault("--url") ?? context.GetEnvironmentVariable("TESTWIZZ_JOURNEY_URL");
         if (!listOnly && string.IsNullOrWhiteSpace(url))
             throw new CliException("journey_batch.url",
@@ -122,8 +125,33 @@ public static class JourneyDraftBatch
         using var model = !listOnly && selection.Links.Count > 0
             ? ModelClient.Create(config.Ai, context.GetEnvironmentVariable) : null;
 
+        const string schema = "testwizz.journey-draft-checkpoint/v1";
+        var checkpoint = Path.Combine(output, $"journey-draft-plan-{planId}-checkpoint.json");
+        var fingerprint = listOnly ? "" : BatchResume.Fingerprint(new[]
+        {
+            "journey-draft-batch/v2", CliApp.Version, Path.GetFullPath(root), Path.GetFullPath(output),
+            planId.ToString(CultureInfo.InvariantCulture), selection.Project, area, url!,
+            ConfigJson.ToJson(config).ToJsonString(),
+            BatchResume.StableAdoJson(planJson), BatchResume.StableAdoJson(traceJson),
+            snapshot ?? "",
+        });
+        var loadedRows = !listOnly && context.Has("--resume")
+            ? BatchResume.Read(checkpoint, schema, fingerprint) : new JsonArray();
+        var saved = loadedRows.OfType<JsonObject>()
+            .Where(item => (string?)item["key"] is { Length: > 0 })
+            .ToDictionary(item => (string)item["key"]!, item => item, StringComparer.Ordinal);
+        void Save()
+        {
+            if (listOnly) return;
+            var entries = new JsonArray([.. saved.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                .Select(pair => (JsonNode?)pair.Value.DeepClone())]);
+            BatchResume.Save(checkpoint, schema, fingerprint, entries);
+        }
+        if (!listOnly && !context.Has("--resume")) Save();
+
         var items = new JsonArray();
         var drafted = 0;
+        var resumed = 0;
         var skipped = 0;
         var failed = 0;
         var log = new StringBuilder("Journey draft batch for ADO plan ")
@@ -138,8 +166,18 @@ public static class JourneyDraftBatch
             if (!pairs.TryGetValue(caseId, out var linked) || linked.Length == 0)
             {
                 skipped++;
-                items.Add(new JsonObject { ["testCaseId"] = caseId, ["status"] = "skipped",
-                    ["reason"] = "no_explicit_tested_by_link" });
+                var unrelated = new JsonObject { ["testCaseId"] = caseId, ["status"] = "skipped",
+                    ["reason"] = "no_explicit_tested_by_link" };
+                items.Add(unrelated.DeepClone());
+                if (!listOnly)
+                {
+                    saved["case:" + caseId] = new JsonObject
+                    {
+                        ["key"] = "case:" + caseId, ["status"] = "skipped",
+                        ["testCaseId"] = caseId, ["reason"] = "no_explicit_tested_by_link",
+                    };
+                    Save();
+                }
                 log.Append("  skipped case ").Append(caseId).Append(": no explicit ADO Tested By link\n");
                 continue;
             }
@@ -152,6 +190,54 @@ public static class JourneyDraftBatch
                     items.Add(new JsonObject { ["testCaseId"] = caseId, ["workItemId"] = link.WorkItemId,
                         ["status"] = "linked" });
                     continue;
+                }
+
+                var key = caseId.ToString(CultureInfo.InvariantCulture) + ":" +
+                    link.WorkItemId.ToString(CultureInfo.InvariantCulture);
+                if (context.Has("--resume") && saved.TryGetValue(key, out var previous) &&
+                    (string?)previous["status"] == "drafted" &&
+                    BatchResume.Intact(root, output, (string?)previous["path"], (string?)previous["draftSha256"]) &&
+                    BatchResume.Intact(root, output, (string?)previous["reviewNotes"], (string?)previous["reviewSha256"]))
+                {
+                    try
+                    {
+                        // A plan export does not contain the complete current requirement revision.
+                        // Check ADO again without calling AI before reusing a generated draft.
+                        var current = AdoUiCriteria.Read(root, link.WorkItemId, context.CancellationToken);
+                        if (current.Revision == (int?)previous["workItemRevision"] &&
+                            string.Equals(current.Sha256, (string?)previous["criteriaSha256"],
+                                StringComparison.OrdinalIgnoreCase))
+                        {
+                            resumed++;
+                            items.Add(new JsonObject
+                            {
+                                ["testCaseId"] = caseId, ["workItemId"] = link.WorkItemId,
+                                ["status"] = "resumed",
+                                ["path"] = (string?)previous["path"],
+                                ["reviewNotes"] = (string?)previous["reviewNotes"],
+                            });
+                            log.Append("  resumed WI ").Append(link.WorkItemId)
+                                .Append(" / case ").Append(caseId).Append('\n');
+                            context.Output.Stderr.WriteLine("testwizz journey-draft: resumed WI " +
+                                link.WorkItemId + " / case " + caseId);
+                            continue;
+                        }
+                    }
+                    catch (CliException ex)
+                    {
+                        // Fail closed: a failed ADO freshness check must not result in a
+                        // stale successful draft being accepted. Record a retriable error.
+                        failed++;
+                        items.Add(new JsonObject
+                        {
+                            ["testCaseId"] = caseId, ["workItemId"] = link.WorkItemId,
+                            ["status"] = "failed", ["reason"] = ex.Code,
+                        });
+                        saved[key] = new JsonObject { ["key"] = key, ["status"] = "failed",
+                            ["reason"] = ex.Code };
+                        Save();
+                        continue;
+                    }
                 }
 
                 // Call the existing, validated one-case command in-process. It never executes
@@ -190,6 +276,20 @@ public static class JourneyDraftBatch
                         ["reviewNotes"] = result?["reviewNotes"]?.GetValue<string>(),
                     });
                     drafted++;
+                    var draftPath = result?["path"]?.GetValue<string>();
+                    var reviewPath = result?["reviewNotes"]?.GetValue<string>();
+                    var reviewed = reviewPath is null ? "" : File.ReadAllText(reviewPath);
+                    var criteria = Regex.Match(reviewed, @"(?m)^Criteria SHA-256: ([0-9a-f]{64})$").Groups[1].Value;
+                    saved[key] = new JsonObject
+                    {
+                        ["key"] = key, ["status"] = "drafted",
+                        ["testCaseId"] = caseId, ["workItemId"] = link.WorkItemId,
+                        ["workItemRevision"] = result?["workItemRevision"]?.GetValue<int>(),
+                        ["criteriaSha256"] = criteria,
+                        ["path"] = draftPath, ["draftSha256"] = draftPath is null ? null : BatchResume.ShaFile(draftPath),
+                        ["reviewNotes"] = reviewPath, ["reviewSha256"] = reviewPath is null ? null : BatchResume.ShaFile(reviewPath),
+                    };
+                    Save();
                     log.Append("  drafted WI ").Append(link.WorkItemId).Append(" / case ").Append(caseId).Append('\n');
                 }
                 catch (CliException ex)
@@ -206,6 +306,13 @@ public static class JourneyDraftBatch
                     log.Append("  ").Append(existing ? "skipped" : "failed")
                         .Append(" WI ").Append(link.WorkItemId).Append(" / case ")
                         .Append(caseId).Append(": ").Append(ex.Code).Append('\n');
+                    saved[key] = new JsonObject
+                    {
+                        ["key"] = key, ["status"] = existing ? "skipped" : "failed",
+                        ["testCaseId"] = caseId, ["workItemId"] = link.WorkItemId,
+                        ["reason"] = ex.Code,
+                    };
+                    Save();
                 }
             }
         }
@@ -213,7 +320,7 @@ public static class JourneyDraftBatch
         log.Append("Summary: ").Append(drafted).Append(" drafted, ")
             .Append(skipped).Append(" skipped, ").Append(failed).Append(" failed. ")
             .Append("Review required; nothing executed or applied.\n");
-        var success = listOnly || (failed == 0 && drafted > 0);
+        var success = listOnly || (failed == 0 && (drafted + resumed > 0));
         context.Output.Result("journey-draft", new JsonObject
         {
             ["schema"] = "testwizz.journey-draft-batch/v1",
@@ -225,6 +332,8 @@ public static class JourneyDraftBatch
             ["totalCases"] = selection.CaseIds.Count,
             ["linkedPairs"] = selection.Links.Count,
             ["drafted"] = drafted,
+            ["resumed"] = resumed,
+            ["checkpoint"] = listOnly ? null : checkpoint,
             ["skipped"] = skipped,
             ["failed"] = failed,
             ["listedOnly"] = listOnly,

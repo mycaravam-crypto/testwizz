@@ -71,7 +71,7 @@ public static class JourneyDraftCommand
     public static CommandDefinition Definition { get; } = new(
         "journey-draft",
         "Draft reviewed Playwright journey selectors from ADO test steps and a read-only local UI snapshot; never executes tests.",
-        "testwizz journey-draft [path] (--plan-id <id> [--area <area>] [--list-only] | --workitem <id> --plan <ado-plan.json> --case <id>) [--url <loopback-url>] [--storage-state <file>] [--out <dir>]",
+        "testwizz journey-draft [path] (--plan-id <id> [--area <area>] [--list-only] | --workitem <id> --plan <ado-plan.json> --case <id>) [--url <loopback-url>] [--storage-state <file>] [--resume] [--out <dir>]",
         [
             new("--url", "Running HTTP loopback application URL.", "url"),
             new("--workitem", "ADO work item ID.", "id"),
@@ -82,6 +82,7 @@ public static class JourneyDraftCommand
             new("--list-only", "List plan-to-requirement links without calling AI or opening the browser."),
             new("--storage-state", "DocWizz-compatible Playwright login state, relative to the application repository.", "file"),
             new("--out", "Draft output directory outside the repository.", "dir"),
+            new("--resume", "Continue a matching --plan-id batch; reuse verified journey drafts."),
         ], 1, Run);
 
     public static JourneyCommand.Spec ValidateDraft(JsonObject response, JourneyCommand.TestCase testCase)
@@ -118,8 +119,8 @@ public static class JourneyDraftCommand
                 throw new CliException("usage", "--plan-id cannot be combined with --plan, --case, or --workitem.");
             return JourneyDraftBatch.Run(context);
         }
-        if (context.Has("--area") || context.Has("--list-only"))
-            throw new CliException("usage", "--area and --list-only require --plan-id.");
+        if (context.Has("--area") || context.Has("--list-only") || context.Has("--resume"))
+            throw new CliException("usage", "--area, --list-only and --resume require --plan-id.");
         var address = context.Options.GetValueOrDefault("--url");
         if (!Uri.TryCreate(address, UriKind.Absolute, out var url) || url.Scheme != "http" ||
             !url.IsLoopback || url.UserInfo.Length != 0 || url.Port <= 0 ||

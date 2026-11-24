@@ -74,28 +74,44 @@ public static class BootstrapCommand
         context.Output.Stderr.WriteLine("testwizz bootstrap: fingerprinting C# sources for safe resume...");
         var fingerprint = Fingerprint(root, config, targets, context.Has("--generate-only"), includedProjects, provider.SourceHashes, context.CancellationToken);
         context.Output.Stderr.WriteLine($"testwizz bootstrap: fingerprint ready ({clock.Elapsed.TotalSeconds:F1}s)");
-        var saved = context.Has("--resume") ? ReadCheckpoint(checkpoint, fingerprint) : new JsonArray();
-        var completed = saved.OfType<JsonObject>()
-            .Where(row => (string?)row["generation"] == "ok"
-                && (string?)row["execution"] is "passed" or "not-run"
-                && (string?)row["proposal"] is { } proposal
-                && File.Exists(Path.Combine(proposal, ProposalBundle.ManifestFile)))
+        const string checkpointSchema = "testwizz.bootstrap-checkpoint/v1";
+        var saved = context.Has("--resume") ? BatchResume.Read(checkpoint, checkpointSchema, fingerprint) : new JsonArray();
+        // Only reuse artifacts whose manifest digest and output confinement still match.
+        // A pending/failed execution with a valid generated proposal resumes at the runner,
+        // not at the model; a failed generation is retried.
+        var valid = saved.OfType<JsonObject>()
+            .Where(row => (string?)row["target"] is { Length: > 0 } &&
+                (string?)row["generation"] == "ok" &&
+                (string?)row["proposal"] is { } proposal &&
+                BatchResume.Intact(root, outputDirectory,
+                    Path.Combine(proposal, ProposalBundle.ManifestFile), (string?)row["artifactSha256"]))
             .ToDictionary(row => (string)row["target"]!, row => row, StringComparer.Ordinal);
-        if (!context.Has("--resume"))
-            SaveCheckpoint(checkpoint, fingerprint, new JsonArray());
+        var completed = valid
+            .Where(pair => (string?)pair.Value["execution"] == "passed" ||
+                context.Has("--generate-only") && (string?)pair.Value["execution"] == "not-run")
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        var recovered = valid
+            .Where(pair => !completed.ContainsKey(pair.Key))
+            .ToDictionary(pair => pair.Key, pair => new BootstrapItem(
+                pair.Key, "ok", (string?)pair.Value["proposal"], null, "", 0), StringComparer.Ordinal);
+        var checkpointItems = new Dictionary<string, JsonObject>(valid, StringComparer.Ordinal);
+        void SaveState()
+        {
+            var data = new JsonArray([.. checkpointItems.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                .Select(pair => (JsonNode?)pair.Value.DeepClone())]);
+            BatchResume.Save(checkpoint, checkpointSchema, fingerprint, data);
+        }
+        if (!context.Has("--resume")) SaveState();
         var rows = new JsonArray();
         var succeeded = 0;
         var failed = 0;
         var skipped = 0;
         var text = new StringBuilder("# Initial test baseline\n\n");
         text.Append("| Target | Generation | Execution | Proposal |\n|---|---|---|---|\n");
-        context.Output.Stderr.WriteLine($"Discovered {targets.Length} eligible C# method(s){(includedProjects is null ? "" : " in " + includedProjects.Count + " DocWizz-scoped project(s)")}.");
-        ProgressEvent(context, "discovered", targets.Length, 0, null, null, clock.Elapsed);
-        var pending = targets.Where(target => !completed.ContainsKey(target)).ToArray();
-        var generatedResults = new Dictionary<string, BootstrapItem>(StringComparer.Ordinal);
-        var generationCheckpoint = new JsonArray();
-        foreach (var entry in completed.Values)
-            generationCheckpoint.Add(entry.DeepClone());
+        context.Output.Stderr.WriteLine($"Discovered {targets.Length} eligible C# method(s){(includedProjects is null ? "" : " in " + includedProjects.Count + " DocWizz-scoped project(s)")}. Recovered {completed.Count} completed and {recovered.Count} generated proposal(s).");
+        ProgressEvent(context, "discovered", targets.Length, completed.Count, null, null, clock.Elapsed);
+        var pending = targets.Where(target => !valid.ContainsKey(target)).ToArray();
+        var generatedResults = new Dictionary<string, BootstrapItem>(recovered, StringComparer.Ordinal);
         var workers = 1;
         double previousThroughput = 0;
         var position = 0;
@@ -128,16 +144,20 @@ public static class BootstrapCommand
                 var item = completedTask.GetAwaiter().GetResult();
                 remaining.Remove(completedTask);
                 generatedResults[item.Target] = item;
-                generationCheckpoint.Add(new JsonObject
+                var manifest = item.Proposal is null ? null
+                    : BatchResume.ShaFile(Path.Combine(item.Proposal, ProposalBundle.ManifestFile));
+                checkpointItems[item.Target] = new JsonObject
                 {
                     ["target"] = item.Target,
                     ["generation"] = item.Generation,
-                    ["execution"] = "not-run",
+                    ["execution"] = item.Generation == "ok"
+                        ? context.Has("--generate-only") ? "not-run" : "pending" : "error",
                     ["proposal"] = item.Proposal,
+                    ["artifactSha256"] = manifest,
                     ["error"] = item.Error,
-                });
-                if (context.Has("--generate-only"))
-                    SaveCheckpoint(checkpoint, fingerprint, generationCheckpoint);
+                };
+                // Persist each finished LLM request, even when container execution follows.
+                SaveState();
                 if (item.Diagnostics.Length > 0) context.Output.Stderr.Write(item.Diagnostics);
                 var done = completed.Count + position + batch.Length - remaining.Count;
                 ReportProgress(context, done, targets.Length, item.Target, "generated", clock.Elapsed);
@@ -200,16 +220,21 @@ public static class BootstrapCommand
 
             if (generation == "ok" && (execution is "passed" or "not-run")) succeeded++;
             else failed++;
-            rows.Add(new JsonObject
+            var finalized = new JsonObject
             {
                 ["target"] = target,
                 ["generation"] = generation,
                 ["execution"] = execution,
                 ["proposal"] = proposal,
+                ["artifactSha256"] = checkpointItems.TryGetValue(target, out var prior)
+                    ? (string?)prior["artifactSha256"] : null,
                 ["error"] = error,
-            });
+            };
+            rows.Add(finalized.DeepClone());
+            checkpointItems[target] = finalized;
             AppendRow(text, target, generation, execution, proposal);
-            SaveCheckpoint(checkpoint, fingerprint, rows);
+            // Keep pending results for all other methods when execution is interrupted.
+            SaveState();
             ReportProgress(context, i + 1, targets.Length, target, "complete", clock.Elapsed);
             ProgressEvent(context, "finalized", targets.Length, i + 1, target, generation == "ok" && execution is "passed" or "not-run" ? "ok" : "failed", clock.Elapsed);
         }
@@ -326,6 +351,7 @@ public static class BootstrapCommand
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         void Add(string value) => hash.AppendData(Encoding.UTF8.GetBytes(value + "\n"));
         Add(Path.GetFullPath(root));
+        Add(CliApp.Version);
         Add(ConfigJson.ToJson(config).ToJsonString());
         Add(generateOnly.ToString());
         foreach (var project in (includedProjects ?? new HashSet<string>(StringComparer.Ordinal)).Order(StringComparer.Ordinal)) Add(project);
@@ -337,43 +363,6 @@ public static class BootstrapCommand
             Add(sha256);
         }
         return Convert.ToHexStringLower(hash.GetHashAndReset());
-    }
-
-    private static JsonArray ReadCheckpoint(string path, string fingerprint)
-    {
-        if (!File.Exists(path))
-            throw new CliException("bootstrap.no_checkpoint", "No saved scan found. Start with 'bootstrap --all' first.");
-        try
-        {
-            var state = JsonNode.Parse(File.ReadAllText(path))?.AsObject();
-            if ((string?)state?["fingerprint"] != fingerprint)
-                throw new CliException("bootstrap.changed", "Sources, configuration or scan mode changed; start without --resume.");
-            return state?["items"]?.AsArray() ?? throw new System.Text.Json.JsonException("Missing checkpoint items.");
-        }
-        catch (Exception ex) when (ex is System.Text.Json.JsonException or InvalidOperationException)
-        {
-            throw new CliException("bootstrap.checkpoint_invalid", "Checkpoint is invalid; start without --resume.");
-        }
-    }
-
-    private static void SaveCheckpoint(string path, string fingerprint, JsonArray items)
-    {
-        var state = new JsonObject
-        {
-            ["schema"] = "testwizz.bootstrap-checkpoint/v1",
-            ["fingerprint"] = fingerprint,
-            ["items"] = items.DeepClone(),
-        };
-        var temp = path + ".tmp-" + Guid.NewGuid().ToString("N");
-        try
-        {
-            File.WriteAllText(temp, state.ToJsonString() + "\n");
-            File.Move(temp, path, overwrite: true);
-        }
-        finally
-        {
-            if (File.Exists(temp)) File.Delete(temp);
-        }
     }
 
     private static Dictionary<string, string?> RunOptions(CommandContext context, string proposal)
