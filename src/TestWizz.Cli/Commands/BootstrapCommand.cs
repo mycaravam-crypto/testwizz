@@ -23,7 +23,7 @@ public static class BootstrapCommand
             new("--all", "Discover and process all eligible C# methods."),
             new("--review", "Keep proposals for explicit review (default; no files are applied)."),
             new("--generate-only", "Skip container execution; only generate proposals."),
-            new("--resume", "Continue a matching scan, skipping previously successful targets."),
+            new("--resume", "Resume matching sources; reuse completed and generated-but-not-yet-tested proposals."),
             new("--out", "Proposal directory outside the repository.", "dir"),
             new("--debug", "Print each generated test source to stderr (may contain sensitive source code)."),
             new("--max-workers", "Maximum adaptive generation workers (1-8; default 4).", "n"),
