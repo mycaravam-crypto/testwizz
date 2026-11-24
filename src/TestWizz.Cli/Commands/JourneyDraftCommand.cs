@@ -221,6 +221,7 @@ public static class JourneyDraftCommand
         context.Output.Result("journey-draft", new JsonObject {
             ["schema"] = "testwizz.journey-draft/v1", ["path"] = file, ["reviewNotes"] = notes,
             ["workItemId"] = workItemId, ["workItemRevision"] = ado.Revision,
+            ["criteriaSha256"] = ado.Sha256,
             ["testCaseId"] = caseId, ["testCaseRevision"] = testCase.Revision,
             ["steps"] = draft.Steps.Count, ["executed"] = false, ["needsReview"] = true,
         }, $"Draft: {file}\nReview: {notes}\nNo browser actions or test execution performed.\n");

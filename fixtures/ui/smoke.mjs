@@ -301,6 +301,7 @@ try {
   assert.equal(draftResult.status, 'ok');
   assert.equal(draftResult.result.executed, false);
   assert.equal(draftResult.result.needsReview, true);
+  assert.match(draftResult.result.criteriaSha256, /^[0-9a-f]{64}$/);
   const draftSpec = JSON.parse(await readFile(draftResult.result.path, 'utf8'));
   assert.equal(draftSpec.schema, 'testwizz.journey/v1');
   assert.deepEqual(draftSpec.steps.map(x => x.stepId), [2, 3]);

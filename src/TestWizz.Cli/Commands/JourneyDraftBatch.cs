@@ -4,7 +4,6 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using TestWizz.AI;
 using TestWizz.Core.Configuration;
 using TestWizz.Core.Proposals;
@@ -277,11 +276,11 @@ public static class JourneyDraftBatch
                         BatchResume.ShaFile(reviewFile) is not { } reviewSha)
                         throw new CliException("journey_batch.draft_artifact",
                             "The individual draft did not produce valid journey.json and review.md files.");
-                    var reviewed = File.ReadAllText(reviewFile);
-                    var criteria = Regex.Match(reviewed, @"(?m)^Criteria SHA-256: ([0-9a-f]{64})$").Groups[1].Value;
-                    if (criteria.Length != 64)
+                    var criteria = result?["criteriaSha256"]?.GetValue<string>();
+                    if (criteria is null || criteria.Length != 64 ||
+                        criteria.Any(c => !Uri.IsHexDigit(c)))
                         throw new CliException("journey_batch.draft_artifact",
-                            "The review notes are missing the requirement criteria fingerprint.");
+                            "The structured result is missing a valid requirement criteria fingerprint.");
                     saved[key] = new JsonObject
                     {
                         ["key"] = key, ["status"] = "drafted",
