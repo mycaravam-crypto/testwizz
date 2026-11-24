@@ -22,7 +22,11 @@ public sealed record AiSettings(
     int TimeoutSeconds,
     int MaxContextTokens);
 
-public sealed record RunSettings(ContainerRuntime Runtime, int MaxRepairAttempts);
+/// <param name="Image">
+/// Optional SDK image for restore, build and test (e.g. one that trusts a corporate CA). Null picks
+/// <c>mcr.microsoft.com/dotnet/sdk:&lt;version&gt;</c> from the target framework; <c>run --image</c> takes precedence.
+/// </param>
+public sealed record RunSettings(ContainerRuntime Runtime, int MaxRepairAttempts, string? Image = null);
 
 /// <param name="Output">Proposal output directory, relative to the directory containing the config file.</param>
 public sealed record TestWizzConfig(AiSettings Ai, RunSettings Run, string Output)

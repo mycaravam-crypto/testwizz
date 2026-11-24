@@ -48,6 +48,11 @@ internal sealed partial record BatchFailure(string Code, string Message)
         }
 
         var result = Member(response, "result");
+        if (Member(result, "diagnosis") is { } diagnosis && Text(diagnosis, "code") is { } diagnosisCode)
+        {
+            return Create("run." + diagnosisCode, Text(diagnosis, "message") ?? "Run failed.");
+        }
+
         var summary = Member(result, "summary");
         var status = Text(result, "status") ?? "failed";
         return Create("run." + status, string.Create(CultureInfo.InvariantCulture,

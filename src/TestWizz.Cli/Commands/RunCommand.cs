@@ -25,7 +25,7 @@ public static class RunCommand
         Options:
         [
             new(ProposalOption, "Proposal id (a folder in the output directory) or the bundle directory itself.", "id"),
-            new(ImageOption, "Container image (default: mcr.microsoft.com/dotnet/sdk:<version> from the target framework).", "image"),
+            new(ImageOption, "Container image for restore, build and test; overrides run.image (default: mcr.microsoft.com/dotnet/sdk:<version> from the target framework).", "image"),
             new(TimeoutOption, $"Time limit for all phases together, 30-7200 seconds (default {DefaultTimeoutSeconds}).", "seconds"),
             new(OutOption, "Directory that holds proposal bundles (default: 'output' in testwizz.json).", "dir"),
             new(NoRepairOption, "Run once; do not ask the model to repair failing tests."),
@@ -45,6 +45,12 @@ public static class RunCommand
             && (!int.TryParse(timeoutText, NumberStyles.None, CultureInfo.InvariantCulture, out timeoutSeconds) || timeoutSeconds is < 30 or > 7200))
         {
             throw new CliException("usage", $"{TimeoutOption} must be a whole number of seconds between 30 and 7200.");
+        }
+
+        var cliImage = context.Options.TryGetValue(ImageOption, out var imageText) && !string.IsNullOrWhiteSpace(imageText) ? imageText.Trim() : null;
+        if (cliImage is not null && ContainerImage.Problem(cliImage) is { } imageProblem)
+        {
+            throw new CliException("usage", $"{ImageOption}: {imageProblem}");
         }
 
         var root = context.PathArgument();
@@ -74,7 +80,8 @@ public static class RunCommand
                     $"No usable container runtime: {problem} TestWizz never runs generated tests on the host; start {runtime.Name} or set run.runtime in testwizz.json.");
             }
 
-            var image = context.Options.TryGetValue(ImageOption, out var imageText) && !string.IsNullOrWhiteSpace(imageText) ? imageText : null;
+            // The command line wins over run.image; with neither, the runner picks the SDK image from the target framework.
+            var image = cliImage ?? config.Run.Image;
             var repair = !context.Has(NoRepairOption) && config.Run.MaxRepairAttempts > 0;
             Func<ModelClient>? clientFactory = repair ? () => ModelClient.Create(config.Ai, context.GetEnvironmentVariable) : null;
             // Repair attempts (and, in a batch, other targets) reuse one restore when its inputs are identical.
@@ -136,6 +143,11 @@ public static class RunCommand
         foreach (var edited in proposal.Edited)
         {
             text.Append(CultureInfo.InvariantCulture, $"note: {edited} was edited in the bundle after generation.\n");
+        }
+
+        if (r.Diagnosis is { } diagnosis)
+        {
+            text.Append(CultureInfo.InvariantCulture, $"\n{diagnosis.Code}: {diagnosis.Message}\n");
         }
 
         if (r.CompileErrors.Count > 0)
