@@ -34,6 +34,8 @@ Restricting the area may exclude relationships. Inspect the reported counts befo
 
 ```bash
 testwizz journey-draft . --plan-id 12 --out ../journey-drafts --format json
+# On interruption, reuse the exact same output directory and plan:
+testwizz journey-draft . --plan-id 12 --out ../journey-drafts --resume --format json
 ```
 
 The URL comes from `TESTWIZZ_JOURNEY_URL` or an explicit `--url`. Authenticated capture additionally reads `TESTWIZZ_STORAGE_STATE` or `--storage-state`. The state format matches DocWizz's screenshot feature (cookies, localStorage, and its per-origin sessionStorage extension); tokens are **never copied to the KI prompt or output files**. If the session is expired or rejected, capture fails with `ui.auth_failed` rather than passing a login screen to the model. **All cases in a batch use the same starting route and a bounded, read-only UI accessibility snapshot.** ADO does not supply reliable routes per test case; verify each route during review.
@@ -42,6 +44,7 @@ Example external output:
 
 ```text
 ../journey-drafts/
+  journey-draft-plan-12-checkpoint.json
   journey-plan-12-<run>/
     ado-plan.json
     ado-trace.json
@@ -50,7 +53,7 @@ Example external output:
     review.md
 ```
 
-The versioned JSON result records every linked pair as `drafted`, `skipped` or `failed`, with paths or reason codes. Individual failures do not silently hide other cases. Valid drafts preserve the ADO step IDs and order, and propose one `click`/`fill` action plus one visibility assertion per step.
+The versioned JSON result records every linked pair as `drafted`, `resumed`, `skipped` or `failed`, with paths or reason codes. Individual failures do not silently hide other cases. A checkpoint is updated atomically after each pair. `--resume` verifies file digests, unchanged ADO plan/trace data, the current UI snapshot and the current work-item revision/criteria before reusing an existing draft. A changed input fails closed (or regenerates the affected pair); no earlier model output is assumed current without validation. Valid drafts preserve the ADO step IDs and order, and propose one `click`/`fill` action plus one visibility assertion per step.
 
 **Current limits:** 1–6 explicit steps per case; shared-step references are not expanded. Each linked requirement must expose 1–5 acceptance criteria. Interactive login and per-case route discovery are not automated. Reuse a session created by DocWizz instead. **The login-state origin must match the TestWizz URL exactly**: `localhost` and `127.0.0.1` are different. The read-only UI probe permits only same-origin GET/HEAD requests; unlike DocWizz's general screenshot capture, cross-origin API requests remain blocked by TestWizz. If your application calls an API on a second origin, this still needs a deliberately restricted network allowlist. The trusted application's JavaScript executes during the snapshot.
 

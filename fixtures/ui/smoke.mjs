@@ -18,6 +18,7 @@ const project = join(temporary, 'project');
 const proposals = join(temporary, 'proposals');
 let broken = false;
 let requested = 0;
+let draftRequests = 0;
 let websocketConnections = 0;
 let writeRequests = 0;
 let authorizedRequests = 0;
@@ -153,6 +154,7 @@ try {
       for await (const part of request) raw += part;
       const prompt = JSON.parse(raw).messages.find(m => m.role === 'user').content;
       if (prompt.includes('ADO test-case steps:')) {
+        draftRequests++;
         assert.match(prompt, /2\. Action: Enter delivery address/);
         assert.match(prompt, /3\. Action: Place order/);
         assert.match(prompt, /Read-only accessible UI snapshot/);
@@ -261,6 +263,23 @@ try {
       ]
     }]
   }));
+  // Fake ADO exports change generatedAt on each invocation; this timestamp must
+  // not invalidate an otherwise matching journey checkpoint.
+  const fakeAdo = [
+    '#!/usr/bin/env node',
+    'const fs = require("node:fs");',
+    'const args = process.argv.slice(2);',
+    'if (args[0] === "testplan" && args[1] === "export") {',
+    '  process.stdout.write(fs.readFileSync(' + JSON.stringify(adoPlan) + ', "utf8"));',
+    '} else if (args[0] === "testplan" && args[1] === "trace-export") {',
+    '  console.log(JSON.stringify({format:"ado.test-traceability/v1",project:"Shop",area:"Shop",',
+    '    generatedAt:new Date().toISOString(),planId:12,requirements:[{id:4711,testCaseIds:[512]}]}));',
+    '} else {',
+    '  console.log(JSON.stringify(' + JSON.stringify(adoContext) + '));',
+    '}',
+  ].join('\n') + '\n';
+  await writeFile(join(fakeBin, 'ado'), fakeAdo, { mode: 0o755 });
+
   await writeFile(join(project, 'journey.json'), JSON.stringify({
     schema: 'testwizz.journey/v1',
     steps: [
@@ -290,6 +309,28 @@ try {
   assert.match(reviewText, /revision 3/);
   assert.equal(writeRequests, beforeDraftWrites,
     'Read-only drafting must not submit forms');
+
+  // Smart resume: a full ADO plan with volatile exportedAt is not regenerated.
+  const batchDir = join(temporary, 'journey-batch');
+  const envAdo = { ...process.env, PATH: fakeBin + ':' + process.env.PATH };
+  const batchStart = draftRequests;
+  const firstBatch = JSON.parse((await execute('dotnet', [
+    dll, 'journey-draft', project, '--plan-id', '12', '--url', appUrl,
+    '--out', batchDir, '--format', 'json'
+  ], { timeout: 90000, env: envAdo })).stdout);
+  assert.equal(firstBatch.status, 'ok');
+  assert.equal(firstBatch.result.drafted, 1);
+  assert.equal(firstBatch.result.resumed, 0);
+  assert.equal(draftRequests, batchStart + 1);
+  const resumedBatch = JSON.parse((await execute('dotnet', [
+    dll, 'journey-draft', project, '--plan-id', '12', '--url', appUrl,
+    '--out', batchDir, '--resume', '--format', 'json'
+  ], { timeout: 90000, env: envAdo })).stdout);
+  assert.equal(resumedBatch.status, 'ok');
+  assert.equal(resumedBatch.result.drafted, 0);
+  assert.equal(resumedBatch.result.resumed, 1);
+  assert.equal(draftRequests, batchStart + 1, 'Resume must not make a second LLM call');
+  assert.deepEqual(firstBatch.result.items[0].path, resumedBatch.result.items[0].path);
 
   const journeyOut = join(temporary, 'journey-evidence');
   const captured = await execute('dotnet', [
