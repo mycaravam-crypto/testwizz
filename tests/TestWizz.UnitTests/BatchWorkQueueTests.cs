@@ -10,8 +10,10 @@ public sealed class BatchWorkQueueTests
     {
         var slow = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         var fast = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var startedSecond = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var startedThird = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new ConcurrentQueue<int>();
+        var startedCount = 0;
         var finished = new List<int>();
 
         int[] targets = [0, 1, 2];
@@ -21,6 +23,7 @@ public sealed class BatchWorkQueueTests
             (target, _) =>
             {
                 started.Enqueue(target);
+                if (Interlocked.Increment(ref startedCount) == 2) startedSecond.TrySetResult();
                 if (target == 2) startedThird.TrySetResult();
                 return target switch
                 {
@@ -32,13 +35,9 @@ public sealed class BatchWorkQueueTests
             (target, result, _) => finished.Add(target),
             null, null, TestContext.Current.CancellationToken);
 
-        var initial = await Task.WhenAny(
-            Task.Run(async () =>
-            {
-                while (started.Count < 2)
-                    await Task.Delay(10, TestContext.Current.CancellationToken);
-            }, TestContext.Current.CancellationToken),
+        var initial = await Task.WhenAny(startedSecond.Task,
             Task.Delay(5000, TestContext.Current.CancellationToken));
+        Assert.Same(startedSecond.Task, initial);
         Assert.Equal(2, started.Count);
         Assert.DoesNotContain(2, started);
         fast.SetResult(1);
@@ -86,6 +85,8 @@ public sealed class BatchWorkQueueTests
     {
         var slow = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new ConcurrentQueue<int>();
+        var startedSecond = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var countStarted = 0;
         var finished = new List<int>();
         int[] targets = [0, 1, 2, 3];
         var run = BatchWorkQueue.RunAsync(
@@ -93,13 +94,16 @@ public sealed class BatchWorkQueueTests
             (i, _) =>
             {
                 started.Enqueue(i);
+                if (Interlocked.Increment(ref countStarted) == 2) startedSecond.TrySetResult();
                 return i == 0 ? Task.FromResult(-1) : slow.Task;
             },
             (i, result, _) => finished.Add(i),
             result => result < 0,
             null,
             TestContext.Current.CancellationToken);
-        var early = await Task.WhenAny(run, Task.Delay(150, TestContext.Current.CancellationToken));
+        var signal = await Task.WhenAny(startedSecond.Task,
+            Task.Delay(5000, TestContext.Current.CancellationToken));
+        Assert.Same(startedSecond.Task, signal);
         Assert.Equal(2, started.Count);
         Assert.False(run.IsCompleted);
         slow.SetResult(1);
@@ -108,6 +112,59 @@ public sealed class BatchWorkQueueTests
         Assert.Equal(2, outcome.Started);
         Assert.Equal(2, outcome.Completed);
         Assert.Equal(2, finished.Count);
+    }
+
+    [Fact]
+    public async Task CancellationWaitsForAllRunningWorkersToCleanUp()
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            TestContext.Current.CancellationToken);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var startedCount = 0;
+        var cleaned = 0;
+        int[] targets = [0, 1, 2];
+        var run = BatchWorkQueue.RunAsync(
+            targets, 2,
+            async (target, token) =>
+            {
+                if (Interlocked.Increment(ref startedCount) == 2) started.TrySetResult();
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                }
+                catch (OperationCanceledException)
+                {
+                    await Task.Delay(10, TestContext.Current.CancellationToken);
+                    Interlocked.Increment(ref cleaned);
+                    throw;
+                }
+                return target;
+            },
+            (_, _, _) => { },
+            null, null, cancellation.Token);
+        var ready = await Task.WhenAny(started.Task,
+            Task.Delay(5000, TestContext.Current.CancellationToken));
+        Assert.Same(started.Task, ready);
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+        Assert.Equal(2, cleaned);
+    }
+
+    [Fact]
+    public void DefaultAdaptiveLimit_RampsUpAndBacksOffWhenThroughputFalls()
+    {
+        var tuning = new AdaptiveWorkerLimit(4);
+        Assert.Equal(1, tuning.Current);
+        tuning.Completed(TimeSpan.FromSeconds(1));
+        Assert.Equal(2, tuning.Current);
+        tuning.Completed(TimeSpan.FromSeconds(1.5));
+        Assert.Equal(2, tuning.Current);
+        tuning.Completed(TimeSpan.FromSeconds(2));
+        Assert.Equal(3, tuning.Current);
+        tuning.Completed(TimeSpan.FromSeconds(2.5));
+        tuning.Completed(TimeSpan.FromSeconds(3));
+        tuning.Completed(TimeSpan.FromSeconds(5));
+        Assert.Equal(2, tuning.Current);
     }
 
     [Fact]

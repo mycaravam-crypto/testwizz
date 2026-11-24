@@ -27,7 +27,7 @@ public static class BootstrapCommand
             new("--resume", "Resume matching sources; reuse completed and generated-but-not-yet-tested proposals."),
             new("--out", "Proposal directory outside the repository.", "dir"),
             new("--debug", "Print each generated test source to stderr (may contain sensitive source code)."),
-            new("--max-workers", "Maximum concurrent model requests (1-8; default 4).", "n"),
+            new("--max-workers", "Model concurrency (1-8); default adaptive 1..4, explicit N uses N.", "n"),
             new("--verify-workers", "Maximum parallel isolated container test runs (1-4; default 1).", "n"),
             new("--progress-jsonl", "Emit structured bootstrap progress events on stderr."),
         ],
@@ -133,6 +133,12 @@ public static class BootstrapCommand
         text.Append("| Target | Generation | Execution | Proposal |\n|---|---|---|---|\n");
         progress.Stage("generate", targets.Length, valid.Count,
             $"{targets.Length - valid.Count} pending · {valid.Count} restored");
+        // Report restored work before newly finalized work; JSONL progress must be monotonic.
+        var restoredCount = 0;
+        foreach (var target in targets)
+            if (completed.ContainsKey(target))
+                ProgressEvent(context, "resumed", targets.Length, ++restoredCount,
+                    target, "ok", clock.Elapsed);
         ProgressEvent(context, "discovered", targets.Length, completed.Count, null, null, clock.Elapsed);
         var pending = targets.Where(target => !valid.ContainsKey(target)).ToArray();
         var generatedResults = new Dictionary<string, BootstrapItem>(recovered, StringComparer.Ordinal);
@@ -190,10 +196,12 @@ public static class BootstrapCommand
         // and uniquely named containers; no shared writable test/build directories.
         IContainerRuntime? checkedRuntime = null;
         string? runtimeProblem = null;
+        string? runtimeName = null;
         if (!context.Has("--generate-only") && remainingForVerification.Any(target =>
             generatedResults[target].Generation == "ok" && generatedResults[target].Proposal is not null))
         {
             var candidate = context.Runtime(config.Run.Runtime);
+            runtimeName = candidate.Name;
             runtimeProblem = candidate.CheckAsync(context.CancellationToken).GetAwaiter().GetResult();
             if (runtimeProblem is null) checkedRuntime = candidate;
         }
@@ -210,7 +218,9 @@ public static class BootstrapCommand
             {
                 if (runtimeProblem is not null)
                 {
-                    error = "run.no_container_runtime: " + runtimeProblem;
+                    error = $"run.no_container_runtime: No usable container runtime: {runtimeProblem} " +
+                        $"TestWizz never runs generated tests on the host; start {runtimeName} or " +
+                        "set run.runtime in testwizz.json.";
                     execution = "error";
                 }
                 else
@@ -286,7 +296,6 @@ public static class BootstrapCommand
                 succeeded++;
                 AppendRow(text, target, (string?)restored["generation"] ?? "ok",
                     (string?)restored["execution"] ?? "not-run", (string?)restored["proposal"]);
-                ProgressEvent(context, "resumed", targets.Length, completed.Count, target, "ok", clock.Elapsed);
                 continue;
             }
             var result = verifiedResults[target];

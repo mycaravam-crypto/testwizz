@@ -40,8 +40,8 @@ public static class GenerateCommand
             new(AllChangedOption, "Generate proposals for up to 20 changed C# methods and produce one CI summary."),
             new(MinRiskOption, "Minimum deterministic method-risk score (0-100).", "score"),
             new(DebugOption, "Print each generated test source to stderr (may contain sensitive source code)."),
-            new(MaxWorkersOption, "Maximum concurrent model requests for --all-changed (1-8; default 4).", "n"),
-            new(ContinueOnErrorOption, "Continue --all-changed after a failed target (default: stop after the first failed wave)."),
+            new(MaxWorkersOption, "Model concurrency (1-8); default adaptive 1..4, explicit N uses N.", "n"),
+            new(ContinueOnErrorOption, "Continue --all-changed after a failed target; in-flight tasks finish (default: stop dispatching new tasks)."),
             new(ResumeOption, "Resume a matching changed-method batch without repeating verified proposals."),
         ],
         MaxArguments: 1,
@@ -274,6 +274,9 @@ public static class GenerateCommand
         progress.Stage("generate", ranked.Count, results.Count,
             $"{pending.Length} pending · {results.Count} restored");
         var continueOnError = context.Has(ContinueOnErrorOption);
+        var adaptiveGeneration = new AdaptiveWorkerLimit(limit);
+        var fixedGenerationWorkers = context.Has(MaxWorkersOption);
+        var generationClock = Stopwatch.StartNew();
         var aborted = false;
         var batchFailures = 0;
         BatchItem RunOne(ChangedCode.RankedMethod method)
@@ -322,12 +325,14 @@ public static class GenerateCommand
                 // Save each completion before dispatching the next model request.
                 Save();
                 if (item.Status is "failed" or "error") batchFailures++;
+                if (!fixedGenerationWorkers) adaptiveGeneration.Completed(generationClock.Elapsed);
                 if (item.DebugText.Length > 0) progress.Diagnostics(item.DebugText);
                 progress.Update(results.Count, item.Target, failed: batchFailures, active: active);
             },
             item => !continueOnError && item.Status != "ok",
             (done, active) => progress.Pulse($"Waiting for {active} model request(s)", active),
-            context.CancellationToken).GetAwaiter().GetResult();
+            context.CancellationToken,
+            () => fixedGenerationWorkers ? limit : adaptiveGeneration.Current).GetAwaiter().GetResult();
         aborted = queueResult.Stopped && queueResult.Started < pending.Length;
         if (aborted)
             progress.Note($"Stopped after a failed target; {pending.Length - queueResult.Started} target(s) not started. " +
