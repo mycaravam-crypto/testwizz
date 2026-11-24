@@ -60,6 +60,24 @@ internal static class BatchResume
         }
     }
 
+    /// <summary>A manifest digest alone is insufficient: proposed test files might have been edited.</summary>
+    public static bool IntactProposal(string root, string output, string? proposal, string? digest)
+    {
+        if (string.IsNullOrWhiteSpace(proposal) ||
+            !Intact(root, output, Path.Combine(proposal, ProposalBundle.ManifestFile), digest))
+            return false;
+        try
+        {
+            var loaded = ProposalReader.Load(proposal);
+            return loaded.Edited.Count == 0 && ProposalReader.StaleSources(root, loaded).Count == 0;
+        }
+        catch (Exception ex) when (ex is ProposalException or IOException or UnauthorizedAccessException or
+            System.Text.Json.JsonException or InvalidOperationException or ArgumentException)
+        {
+            return false;
+        }
+    }
+
     public static JsonArray Read(string path, string schema, string fingerprint)
     {
         if (!File.Exists(path))

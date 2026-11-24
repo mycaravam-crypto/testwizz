@@ -83,8 +83,7 @@ public static class BootstrapCommand
             .Where(row => (string?)row["target"] is { Length: > 0 } &&
                 (string?)row["generation"] == "ok" &&
                 (string?)row["proposal"] is { } proposal &&
-                BatchResume.Intact(root, outputDirectory,
-                    Path.Combine(proposal, ProposalBundle.ManifestFile), (string?)row["artifactSha256"]))
+                BatchResume.IntactProposal(root, outputDirectory, proposal, (string?)row["artifactSha256"]))
             .ToDictionary(row => (string)row["target"]!, row => row, StringComparer.Ordinal);
         var completed = valid
             .Where(pair => (string?)pair.Value["execution"] == "passed" ||
@@ -226,8 +225,8 @@ public static class BootstrapCommand
                 ["generation"] = generation,
                 ["execution"] = execution,
                 ["proposal"] = proposal,
-                ["artifactSha256"] = checkpointItems.TryGetValue(target, out var prior)
-                    ? (string?)prior["artifactSha256"] : null,
+                ["artifactSha256"] = proposal is null ? null
+                    : BatchResume.ShaFile(Path.Combine(proposal, ProposalBundle.ManifestFile)),
                 ["error"] = error,
             };
             rows.Add(finalized.DeepClone());

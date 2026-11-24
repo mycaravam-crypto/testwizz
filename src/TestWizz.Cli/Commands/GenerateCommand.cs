@@ -249,8 +249,7 @@ public static class GenerateCommand
             var digest = (string?)row["artifactSha256"];
             if (target is null || !eligible.Contains(target) ||
                 (string?)row["status"] != "ok" ||
-                !BatchResume.Intact(root, output,
-                    proposal is null ? null : Path.Combine(proposal, ProposalBundle.ManifestFile), digest))
+                !BatchResume.IntactProposal(root, output, proposal, digest))
                 continue;
             results[target] = new BatchItem(target, "resumed", proposal, null, "", 0, digest);
         }
