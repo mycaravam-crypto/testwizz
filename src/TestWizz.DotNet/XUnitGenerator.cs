@@ -201,7 +201,8 @@ public static class XUnitGenerator
         for (var number = 2; number <= maxRepairs + 1 && !best.IsValid; number++)
         {
             var fixable = Errors(best).Where(f => !NotRepairable.Contains(f.Code)).ToList();
-            if (fixable.Count == 0)
+            // Assemble always produces one file; without one there is nothing to send back for repair.
+            if (fixable.Count == 0 || best.Files.Count == 0)
             {
                 attempts[^1] = attempts[^1] with { Reason = "remaining errors cannot be fixed by rewriting the test file" };
                 break;
