@@ -46,7 +46,11 @@ public static class XUnitValidator
         ["CS1739"] = "signature-mismatch",
         ["CS0122"] = "inaccessible-member",
         ["CS0200"] = "read-only-member",
+        ["CS0272"] = "read-only-member",
+        ["CS0154"] = "read-only-member",
+        ["CS0271"] = "inaccessible-member",
         ["CS1929"] = "receiver-mismatch",
+        ["CS1503"] = "argument-mismatch",
     };
 
     public static (IReadOnlyList<GeneratedTest> Tests, IReadOnlyList<GenerationFinding> Findings) Validate(
@@ -54,7 +58,8 @@ public static class XUnitValidator
         string code,
         string path,
         XUnitConventions conventions,
-        IReadOnlyCollection<string> scenarioIds)
+        IReadOnlyCollection<string> scenarioIds,
+        bool internalsVisible = true)
     {
         var findings = new List<GenerationFinding>();
         var tree = CSharpSyntaxTree.ParseText(code, ParseOptions, path: path);
@@ -114,11 +119,12 @@ public static class XUnitValidator
             findings.Add(GenerationFinding.Warning("scenario-not-covered", $"No generated test covers {missing}."));
         }
 
-        findings.AddRange(ApiFindings(provider, tree, conventions));
+        findings.AddRange(ApiFindings(provider, tree, conventions, internalsVisible));
+        findings.AddRange(EncapsulationBypasses(root));
         return (tests, findings);
     }
 
-    private static IEnumerable<GenerationFinding> ApiFindings(RoslynContextProvider provider, SyntaxTree tree, XUnitConventions conventions)
+    private static IEnumerable<GenerationFinding> ApiFindings(RoslynContextProvider provider, SyntaxTree tree, XUnitConventions conventions, bool internalsVisible)
     {
         // The test project's own <Using> items are global usings of the real build; without them an extension method
         // in an imported namespace looks missing, and for an enum receiver Roslyn then binds System.Enum.GetName(...)
@@ -183,6 +189,127 @@ public static class XUnitValidator
             if (seen.Add((diagnostic.GetMessage(System.Globalization.CultureInfo.InvariantCulture), line)))
             {
                 yield return GenerationFinding.Error(code, diagnostic.GetMessage(System.Globalization.CultureInfo.InvariantCulture), line);
+            }
+        }
+
+        foreach (var finding in GeneratedHelperChecks.Check(provider, compilation, model, tree))
+        {
+            yield return finding;
+        }
+
+        foreach (var finding in AssertionApiFindings(provider, model, tree, conventions))
+        {
+            yield return finding;
+        }
+
+        // The validation compilation is one assembly, so Roslyn never reports internal members as inaccessible.
+        if (!internalsVisible)
+        {
+            foreach (var finding in InternalUses(provider, model, tree, seen))
+            {
+                yield return finding;
+            }
+        }
+    }
+
+    /// <summary>
+    /// <c>Assert.X(...)</c> calls checked by name against the detected xUnit version (#93). <c>Assert</c> that binds to a
+    /// type declared in the repository or in the generated file (a custom helper) is not xUnit's and is not checked;
+    /// the permissive validation stub of <c>Xunit.Assert</c> does not count as such a declaration.
+    /// </summary>
+    private static IEnumerable<GenerationFinding> AssertionApiFindings(RoslynContextProvider provider, SemanticModel model, SyntaxTree tree, XUnitConventions conventions)
+    {
+        if (XUnitAssertApi.MajorVersion(conventions.XunitPackage) is not { } major)
+        {
+            yield break;
+        }
+
+        foreach (var invocation in tree.GetRoot().DescendantNodes().OfType<InvocationExpressionSyntax>())
+        {
+            if (invocation.Expression is not MemberAccessExpressionSyntax access
+                || access.Expression.ToString() is not ("Assert" or "Xunit.Assert" or "global::Xunit.Assert")
+                || model.GetSymbolInfo(access.Expression).Symbol is INamedTypeSymbol custom
+                    && (provider.IsRepositoryType(custom) || custom.DeclaringSyntaxReferences.Any(r => r.SyntaxTree == tree)))
+            {
+                continue;
+            }
+
+            if (XUnitAssertApi.Problem(access.Name.Identifier.Text, major) is { } problem)
+            {
+                yield return GenerationFinding.Error("unsupported-assertion",
+                    problem + $" (checked by name against {conventions.XunitPackage}; packages are not compiled offline)", Line(invocation.GetLocation()));
+            }
+        }
+    }
+
+    /// <summary>Uses of internal repository members or types, which a test assembly without InternalsVisibleTo cannot see.</summary>
+    private static IEnumerable<GenerationFinding> InternalUses(RoslynContextProvider provider, SemanticModel model, SyntaxTree tree, HashSet<(string, int?)> seen)
+    {
+        foreach (var name in tree.GetRoot().DescendantNodes().OfType<SimpleNameSyntax>())
+        {
+            if (model.GetSymbolInfo(name).Symbol is not { } symbol)
+            {
+                continue;
+            }
+
+            var declared = symbol is IMethodSymbol { ReducedFrom: { } reduced } ? reduced : symbol.OriginalDefinition;
+            var owner = declared as INamedTypeSymbol ?? declared.ContainingType;
+            if (!provider.IsRepositoryType(owner) || declared is ILocalSymbol or IParameterSymbol or ITypeParameterSymbol)
+            {
+                continue;
+            }
+
+            var hidden = new[] { declared }.Concat(Containers(declared))
+                .FirstOrDefault(s => s.DeclaredAccessibility is Accessibility.Internal or Accessibility.ProtectedAndInternal);
+            if (hidden is null)
+            {
+                continue;
+            }
+
+            var message = $"'{hidden.ToDisplayString(SymbolDisplayFormat.CSharpShortErrorMessageFormat)}' is internal and the test project has no InternalsVisibleTo for it; test through public members.";
+            var line = Line(name.GetLocation());
+            if (seen.Add((message, line)))
+            {
+                yield return GenerationFinding.Error("inaccessible-member", message, line);
+            }
+        }
+
+        static IEnumerable<ISymbol> Containers(ISymbol symbol)
+        {
+            for (var type = symbol.ContainingType; type is not null; type = type.ContainingType)
+            {
+                yield return type;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reflection and accessor tricks that reach private state instead of testing behavior: <c>BindingFlags.NonPublic</c>,
+    /// <c>[UnsafeAccessor]</c>, <c>PrivateObject</c>/<c>PrivateType</c>, <c>Activator.CreateInstance(…, nonPublic: true)</c>
+    /// and <c>InternalsVisibleTo</c> declared in the test file itself.
+    /// </summary>
+    private static IEnumerable<GenerationFinding> EncapsulationBypasses(SyntaxNode root)
+    {
+        var seen = new HashSet<int>();
+        foreach (var node in root.DescendantNodes())
+        {
+            var reason = node switch
+            {
+                MemberAccessExpressionSyntax { Name.Identifier.Text: "NonPublic" } access when access.Expression.ToString().EndsWith("BindingFlags", StringComparison.Ordinal)
+                    => "BindingFlags.NonPublic reflection",
+                AttributeSyntax attribute when attribute.Name.ToString().EndsWith("UnsafeAccessor", StringComparison.Ordinal)
+                    => "[UnsafeAccessor]",
+                AttributeSyntax attribute when attribute.Name.ToString().EndsWith("InternalsVisibleTo", StringComparison.Ordinal)
+                    => "InternalsVisibleTo in the test file",
+                IdentifierNameSyntax { Identifier.Text: "PrivateObject" or "PrivateType" } id => id.Identifier.Text,
+                ArgumentSyntax { NameColon.Name.Identifier.Text: "nonPublic" } => "Activator.CreateInstance(nonPublic: true)",
+                _ => null,
+            };
+            var line = Line(node.GetLocation());
+            if (reason is not null && seen.Add(line))
+            {
+                yield return GenerationFinding.Error("encapsulation-bypass",
+                    $"{reason} reaches non-public members; test the public behavior instead, or report the scenario as untestable.", line);
             }
         }
     }

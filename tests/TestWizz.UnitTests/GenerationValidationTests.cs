@@ -280,3 +280,348 @@ public sealed class ScenarioReferenceTests : FixtureValidation
         Assert.Contains("never invent new ids", request.System, StringComparison.Ordinal);
     }
 }
+
+/// <summary>Member accessibility context and testability guidance (#92).</summary>
+public sealed class MemberAccessTests : FixtureValidation
+{
+    private const string BackgroundTask = """
+        namespace Shop;
+
+        public class BackgroundTask
+        {
+            public DateTime StartTime { get; private set; }
+            protected TimeSpan Intervall { get; set; } = TimeSpan.FromMinutes(1);
+            private int _runs;
+            internal int Runs => _runs;
+            public bool IsRunning { get; private set; }
+
+            public void Start(DateTime now)
+            {
+                StartTime = now;
+                IsRunning = true;
+                _runs++;
+            }
+        }
+        """;
+
+    private const string Header = """
+        namespace Shop.Tests;
+
+        public class BackgroundTaskStartTests
+        {
+            [Fact]
+            [Trait("Scenario", "S1")]
+            public void Start_SetsStartTime()
+            {
+                var task = new BackgroundTask();
+        """;
+
+    private const string Footer = """
+
+                task.Start(new DateTime(2026, 1, 1));
+                Assert.True(task.IsRunning);
+            }
+        }
+        """;
+
+    public MemberAccessTests() => File.WriteAllText(Path.Combine(Fixture, "src", "Shop", "BackgroundTask.cs"), BackgroundTask);
+
+    private MemberAccess.Report Report()
+    {
+        var provider = RoslynContextProvider.Load(Fixture, TestContext.Current.CancellationToken);
+        var context = provider.GetContext("BackgroundTask.Start", "test");
+        return MemberAccess.Describe(provider, context, XUnitConventions.Detect(Fixture, context))!;
+    }
+
+    private void GrantInternals() =>
+        File.WriteAllText(Path.Combine(Fixture, "src", "Shop", "Shop.csproj"),
+            """<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><InternalsVisibleTo Include="$(AssemblyName).Tests" /></ItemGroup></Project>""");
+
+    [Fact]
+    public void Report_SeparatesAccessibleFromInaccessibleMembers()
+    {
+        var report = Report();
+
+        Assert.False(report.InternalsVisible);
+        Assert.Contains(report.Accessible, a => a.StartsWith("DateTime StartTime", StringComparison.Ordinal) && a.Contains("read-only from tests (private set)", StringComparison.Ordinal));
+        Assert.Contains(report.Accessible, a => a.StartsWith("void Start(DateTime)", StringComparison.Ordinal));
+        Assert.Contains(report.Inaccessible, a => a.StartsWith("protected TimeSpan Intervall", StringComparison.Ordinal));
+        Assert.Contains(report.Inaccessible, a => a.StartsWith("private int _runs", StringComparison.Ordinal));
+        Assert.Contains(report.Inaccessible, a => a.StartsWith("internal int Runs", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void InternalsVisibleToProjectItem_MakesInternalMembersAccessible()
+    {
+        GrantInternals();
+
+        var report = Report();
+
+        Assert.True(report.InternalsVisible);
+        Assert.Contains(report.Accessible, a => a.StartsWith("int Runs", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Prompt_CarriesAccessibilityAndTheNoBypassRule()
+    {
+        var provider = RoslynContextProvider.Load(Fixture, TestContext.Current.CancellationToken);
+        var context = provider.GetContext("BackgroundTask.Start", "test");
+        var extractor = new CSharpScenarioExtractor();
+        var plan = TestWizz.Core.Planning.ScenarioPlanner.Create(context, extractor.Version, extractor.Extract(context));
+        var conventions = XUnitConventions.Detect(Fixture, context);
+
+        var request = XUnitGenerator.BuildRequest(context, plan, conventions, MemberAccess.PromptLines(MemberAccess.Describe(provider, context, conventions)));
+
+        Assert.Contains("## What tests can use of BackgroundTask", request.User, StringComparison.Ordinal);
+        Assert.Contains("- protected TimeSpan Intervall", request.User, StringComparison.Ordinal);
+        Assert.Contains("never use reflection", request.System, StringComparison.Ordinal);
+        Assert.Contains("Untestable <id>", request.System, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("task.StartTime = DateTime.MinValue;", "read-only-member")]
+    [InlineData("var i = task.Intervall;", "inaccessible-member")]
+    [InlineData("var r = task.Runs;", "inaccessible-member")]
+    [InlineData("var f = typeof(BackgroundTask).GetField(\"_runs\", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);", "encapsulation-bypass")]
+    public void BypassingEncapsulation_IsAnError(string statement, string code)
+    {
+        var result = Assemble("BackgroundTask.Start", Header + "\n        " + statement + Footer);
+
+        Assert.Contains(code, Codes(result));
+    }
+
+    [Fact]
+    public void InternalMember_IsFineWithInternalsVisibleTo()
+    {
+        GrantInternals();
+
+        var result = Assemble("BackgroundTask.Start", Header + "\n        var r = task.Runs;" + Footer);
+
+        Assert.DoesNotContain("inaccessible-member", Codes(result));
+    }
+
+    [Fact]
+    public void PublicBehaviorTest_IsValid()
+    {
+        var result = Assemble("BackgroundTask.Start", Header + "\n        var before = task.StartTime;" + Footer);
+
+        Assert.True(result.IsValid, string.Join("; ", result.Findings.Select(f => f.Message)));
+    }
+}
+
+/// <summary>xUnit assertion APIs are validated against the detected xUnit version (#93).</summary>
+public sealed class AssertionApiTests : FixtureValidation
+{
+    private static string With(string statement) => CannedTests.Divide.Replace(
+        "Assert.Equal(4, _calculator.Divide(8, 2));", "Assert.Equal(4, _calculator.Divide(8, 2));\n        " + statement, StringComparison.Ordinal);
+
+    private void UseXunit2() =>
+        File.WriteAllText(Path.Combine(Fixture, "tests", "Shop.Tests", "Shop.Tests.csproj"), File.ReadAllText(Path.Combine(Fixture, "tests", "Shop.Tests", "Shop.Tests.csproj"))
+            .Replace("<PackageReference Include=\"xunit.v3\" Version=\"3.2.2\" />", "<PackageReference Include=\"xunit\" Version=\"2.9.3\" />", StringComparison.Ordinal));
+
+    [Fact]
+    public void DoesNotThrow_IsRejectedWithAnAlternative()
+    {
+        var result = Assemble("Calculator.Divide", With("Assert.DoesNotThrow(() => _calculator.Divide(1, 1));"));
+
+        var finding = Assert.Single(result.Findings, f => f.Code == "unsupported-assertion");
+        Assert.Contains("Record.Exception", finding.Message, StringComparison.Ordinal);
+        Assert.Contains("xunit.v3 3.2.2", finding.Message, StringComparison.Ordinal);
+        Assert.False(result.IsValid);
+    }
+
+    [Theory]
+    [InlineData("Assert.Equals(1, 1);")]
+    [InlineData("Assert.ReferenceEquals(_calculator, _calculator);")]
+    [InlineData("Assert.AreEqual(1, 1);")]
+    public void AssertionsFromOtherFrameworksOrObject_AreRejected(string statement) =>
+        Assert.Contains("unsupported-assertion", Codes(Assemble("Calculator.Divide", With(statement))));
+
+    [Theory]
+    [InlineData("Assert.InRange(_calculator.Divide(8, 2), 3, 5);")]
+    [InlineData("Assert.Multiple(() => Assert.True(true), () => Assert.False(false));")]
+    [InlineData("Assert.Skip(\"not on CI\");")]
+    [InlineData("var ex = Record.Exception(() => _calculator.Divide(1, 1)); Assert.Null(ex);")]
+    public void LegitimateXunitV3Assertions_AreAccepted(string statement) =>
+        Assert.DoesNotContain("unsupported-assertion", Codes(Assemble("Calculator.Divide", With(statement))));
+
+    [Fact]
+    public void V3OnlyAssertion_IsRejectedForAnXunit2Project()
+    {
+        UseXunit2();
+
+        var finding = Assert.Single(Assemble("Calculator.Divide", With("Assert.Skip(\"later\");")).Findings, f => f.Code == "unsupported-assertion");
+
+        Assert.Contains("exists only in xUnit v3", finding.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CustomAssertHelper_IsNotTreatedAsXunit()
+    {
+        var code = With("Assert.DoesNotThrow(() => _calculator.Divide(1, 1));") + """
+
+            internal static class Assert
+            {
+                public static void DoesNotThrow(Action action) => action();
+                public static void Equal<T>(T expected, T actual) { }
+                public static void Throws<T>(Action action) { }
+            }
+            """;
+
+        Assert.DoesNotContain("unsupported-assertion", Codes(Assemble("Calculator.Divide", code)));
+    }
+
+    [Fact]
+    public void V3List_MatchesTheRealXunitAssertType()
+    {
+        var real = typeof(Xunit.Assert).GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.DeclaredOnly)
+            .Where(m => !m.IsSpecialName).Select(m => m.Name).Distinct().Order(StringComparer.Ordinal).ToList();
+
+        // ReferenceEquals/Equals exist only to throw; they are deliberately reported as unsupported.
+        Assert.Equal(real.Except(["Equals", "ReferenceEquals"]), XUnitAssertApi.V3.Order(StringComparer.Ordinal));
+    }
+}
+
+/// <summary>Generated helper interface implementations and dependency types (#94).</summary>
+public sealed class GeneratedHelperTests : FixtureValidation
+{
+    private const string Worker = """
+        using Microsoft.Extensions.DependencyInjection;
+        using Microsoft.Extensions.Logging;
+
+        namespace Shop.Jobs;
+
+        public class Worker
+        {
+            private readonly IServiceScopeFactory _scopes;
+
+            public Worker(IServiceScopeFactory scopes, ILogger<Worker> logger) => _scopes = scopes;
+
+            public bool Run()
+            {
+                using var scope = _scopes.CreateScope();
+                return scope.ServiceProvider is not null;
+            }
+        }
+        """;
+
+    private const string CompleteFakes = """
+        private sealed class FakeLogger : ILogger<Worker>
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+            public bool IsEnabled(LogLevel logLevel) => true;
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) { }
+        }
+
+        private sealed class FakeScope : IServiceScope
+        {
+            public IServiceProvider ServiceProvider { get; } = new FakeProvider();
+            public void Dispose() { }
+        }
+
+        private sealed class FakeProvider : IServiceProvider
+        {
+            public object? GetService(Type serviceType) => null;
+        }
+
+        private sealed class FakeScopeFactory : IServiceScopeFactory
+        {
+            public IServiceScope CreateScope() => new FakeScope();
+        }
+        """;
+
+    public GeneratedHelperTests()
+    {
+        Directory.CreateDirectory(Path.Combine(Fixture, "src", "Shop", "Jobs"));
+        File.WriteAllText(Path.Combine(Fixture, "src", "Shop", "Jobs", "Worker.cs"), Worker);
+    }
+
+    private static string Tests(string fakes, string factory = "new FakeScopeFactory()", string usings = "using Shop.Jobs;\n") => $$"""
+        {{usings}}using Microsoft.Extensions.DependencyInjection;
+        using Microsoft.Extensions.Logging;
+
+        namespace Shop.Tests;
+
+        public class WorkerRunTests
+        {
+            [Fact]
+            [Trait("Scenario", "S1")]
+            public void Run_CreatesAScope()
+            {
+                var worker = new Worker({{factory}}, new FakeLogger());
+
+                Assert.True(worker.Run());
+            }
+
+        {{fakes}}
+        }
+        """;
+
+    private TestWizz.Core.Generation.GenerationResult Check(string code) => Assemble("Worker.Run", code);
+
+    [Fact]
+    public void CompleteFakes_AreValid()
+    {
+        var result = Check(Tests(CompleteFakes));
+
+        Assert.DoesNotContain(result.Findings, f => f.Code is "incomplete-fake" or "argument-type-mismatch" or "missing-using" or "unverified-fake");
+    }
+
+    [Fact]
+    public void LoggerFakeWithoutIsEnabled_IsIncomplete()
+    {
+        var fakes = CompleteFakes.Replace("    public bool IsEnabled(LogLevel logLevel) => true;\n", "", StringComparison.Ordinal);
+
+        var finding = Assert.Single(Check(Tests(fakes)).Findings, f => f.Code == "incomplete-fake");
+
+        Assert.Contains("FakeLogger implements Microsoft.Extensions.Logging.ILogger but does not declare IsEnabled", finding.Message, StringComparison.Ordinal);
+        Assert.Contains("known members", finding.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ScopeFakeWithoutServiceProvider_IsIncomplete()
+    {
+        var fakes = CompleteFakes.Replace("    public IServiceProvider ServiceProvider { get; } = new FakeProvider();\n", "", StringComparison.Ordinal);
+
+        Assert.Contains(Check(Tests(fakes)).Findings, f => f.Code == "incomplete-fake" && f.Message.Contains("ServiceProvider", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void FactoryFakeThatIsNotAnIServiceScopeFactory_IsAnArgumentMismatch()
+    {
+        var fakes = CompleteFakes + "\n    private sealed class NotAFactory : IDisposable { public void Dispose() { } }";
+
+        var finding = Assert.Single(Check(Tests(fakes, "new NotAFactory()")).Findings, f => f.Code == "argument-type-mismatch");
+
+        Assert.Contains("expects IServiceScopeFactory", finding.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RepositoryInterfaceFake_IsVerifiedByCompilation()
+    {
+        var fakes = CompleteFakes + "\n    private sealed class FakeClock : Shop.IClock { }";
+
+        var finding = Assert.Single(Check(Tests(fakes)).Findings, f => f.Code == "incomplete-fake");
+
+        Assert.Contains("verified by compilation", finding.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RepositoryTypeWithoutItsUsing_IsAMissingUsing()
+    {
+        var finding = Assert.Single(Check(Tests(CompleteFakes, usings: "")).Findings, f => f.Code == "missing-using" && f.Message.Contains("Worker", StringComparison.Ordinal));
+
+        Assert.Contains("using Shop.Jobs;", finding.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UnknownUnresolvedInterface_IsOnlyAWarning()
+    {
+        var fakes = CompleteFakes + "\n    private sealed class FakeLegacy : ILegacyGateway { }";
+
+        var result = Check(Tests(fakes));
+
+        Assert.Contains("unverified-fake", Codes(result, "warning"));
+        Assert.DoesNotContain("unverified-fake", Codes(result));
+    }
+}

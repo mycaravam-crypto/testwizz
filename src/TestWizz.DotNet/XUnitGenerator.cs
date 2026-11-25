@@ -36,6 +36,9 @@ public static class XUnitGenerator
           test for it and add an assumption "Untestable <id>: <reason>".
         - Test the behavior in each scenario's expected behavior. Call the code under test exactly as the signatures in
           the data show; do not invent constructors, methods, properties or types.
+        - Use only members the data lists as accessible from tests. Never read or set private, protected or
+          inaccessible members, and never use reflection, UnsafeAccessor or similar ways around access modifiers;
+          test the observable public behavior instead.
         - Replace constructor dependencies with the mocking library named in the data, or with small private fake
           classes when none is available.
         - Use the assertion style named in the data. Every test needs at least one meaningful assertion. Never use
@@ -61,7 +64,8 @@ public static class XUnitGenerator
     public static string PromptSha256 { get; } =
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(PromptTemplate + "\n" + SystemPrompt + "\n" + Schema.ToJsonString())));
 
-    public static JsonChatRequest BuildRequest(ContextDocument context, PlanDocument plan, XUnitConventions conventions)
+    /// <param name="access">Prompt lines from <see cref="MemberAccess.PromptLines"/>; what tests can and cannot use.</param>
+    public static JsonChatRequest BuildRequest(ContextDocument context, PlanDocument plan, XUnitConventions conventions, IReadOnlyList<string>? access = null)
     {
         var user = new StringBuilder();
         user.Append("Write the test file described in the data below.\n\n").Append(PromptData.Begin).Append('\n');
@@ -92,7 +96,7 @@ public static class XUnitGenerator
         }
 
         user.Append("\n\n");
-        AppendCodeUnderTest(user, context);
+        AppendCodeUnderTest(user, context, access);
 
         user.Append("\n## Test plan\n");
         user.Append("Valid scenario ids: ").Append(string.Join(", ", plan.Scenarios.Select(s => s.Id)))
@@ -118,7 +122,7 @@ public static class XUnitGenerator
     }
 
     /// <summary>Namespace, type, constructors, signature, source excerpt and dependencies of the target.</summary>
-    internal static void AppendCodeUnderTest(StringBuilder user, ContextDocument context)
+    internal static void AppendCodeUnderTest(StringBuilder user, ContextDocument context, IReadOnlyList<string>? access = null)
     {
         user.Append("## Code under test\n");
         user.Append("Namespace: ").Append(Clean(context.Target.Namespace ?? "(global)")).Append('\n');
@@ -149,6 +153,15 @@ public static class XUnitGenerator
                 }
             }
         }
+
+        if (access is { Count: > 0 })
+        {
+            user.Append('\n');
+            foreach (var line in access)
+            {
+                user.Append(Clean(line)).Append('\n');
+            }
+        }
     }
 
     public static async Task<GenerationResult> GenerateAsync(
@@ -160,7 +173,8 @@ public static class XUnitGenerator
         CancellationToken cancellationToken)
     {
         var digest = await client.ModelDigestAsync(cancellationToken).ConfigureAwait(false);
-        var response = await client.CompleteJsonAsync(BuildRequest(context, plan, conventions), cancellationToken).ConfigureAwait(false);
+        var access = MemberAccess.PromptLines(MemberAccess.Describe(provider, context, conventions));
+        var response = await client.CompleteJsonAsync(BuildRequest(context, plan, conventions, access), cancellationToken).ConfigureAwait(false);
         var normalized = ModelSource.Normalize(response.Content["code"]!.GetValue<string>());
         var assumptions = response.Content["assumptions"]!.AsArray()
             .Select(a => a?.GetValue<string>().Trim() ?? "")
@@ -196,7 +210,8 @@ public static class XUnitGenerator
             findings.Add(GenerationFinding.Error("empty-code", "The model returned no code."));
         }
 
-        var (tests, validation) = XUnitValidator.Validate(provider, code, conventions.FilePath, conventions, [.. plan.Scenarios.Select(s => s.Id)]);
+        var internals = MemberAccess.InternalsVisible(provider, context.Project, conventions.TestProject);
+        var (tests, validation) = XUnitValidator.Validate(provider, code, conventions.FilePath, conventions, [.. plan.Scenarios.Select(s => s.Id)], internals);
         findings.AddRange(validation);
         var files = new[] { new GeneratedFile(conventions.FilePath, code) };
         findings.AddRange(ProposalChecks.Check(provider.Root, files, tests));
