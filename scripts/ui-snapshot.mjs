@@ -24,6 +24,16 @@ try {
   const navigation = await page.goto(address, { waitUntil: 'domcontentloaded', timeout: 12000 });
   await auth.check(navigation, true);
   await page.waitForTimeout(300);
+  // ariaSnapshot includes the current value of every textbox, password fields included (issue #11). Values of
+  // credential and payment fields are cleared in this disposable page before the snapshot, so they never reach the
+  // model; their labels stay. Programmatic value changes fire no input events, and no request can leave the origin.
+  await page.evaluate(() => {
+    const sensitive = /(^|\s)(current-password|new-password|one-time-code|cc-number|cc-csc|cc-exp(-month|-year)?)(\s|$)/;
+    for (const input of document.querySelectorAll('input')) {
+      const type = (input.getAttribute('type') || '').toLowerCase();
+      if (type === 'password' || sensitive.test((input.getAttribute('autocomplete') || '').toLowerCase())) input.value = '';
+    }
+  });
   const snapshot = await page.locator('body').ariaSnapshot({ timeout: 5000 });
   console.log(JSON.stringify({
     title: (await page.title()).slice(0, 200),

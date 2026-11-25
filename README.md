@@ -180,6 +180,13 @@ semantics verification, and no automatically verified UI run. No claims of end-t
 are made. Browser inspection executes the application's JavaScript locally; use only trusted
 development/test applications and sanitized accounts/data.
 
+**What reaches the model from the page:** the accessibility snapshot (`ariaSnapshot`) of the initial page.
+- It contains visible text, labels, and the *current values of form fields*.
+- Values of password fields, and of fields marked `autocomplete` as credentials, one-time codes or card data, are cleared before the snapshot is taken. Their labels remain.
+- JWTs are redacted.
+- Hidden inputs, `display:none` and `aria-hidden` content and data attributes are not in the snapshot.
+- Everything else visible, such as tokens shown as text or prefilled ordinary fields, is sent as is. Use test accounts with sanitized data. `fixtures/ui/snapshot-redaction.mjs` checks this boundary in a real browser.
+
 ## Configuration
 
 `testwizz init` writes `testwizz.yaml` (the legacy `testwizz.json` is still supported). Equivalent YAML configuration:
