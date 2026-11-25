@@ -161,6 +161,52 @@ public sealed partial class BootstrapControlTests : IAsyncLifetime
         Assert.Equal(0, _chats);
     }
 
+    // ---- #27 failure isolation and resume ----
+
+    private string[] Bundles() =>
+        [.. Directory.EnumerateDirectories(_output).Select(Path.GetFileName).OfType<string>().Order(StringComparer.Ordinal)];
+
+    [Fact]
+    public void ResumeWithUnchangedSources_CreatesNoDuplicateProposals()
+    {
+        _invalid = [3];
+        Assert.Equal(ExitCodes.ValidationFailed, Bootstrap().ExitCode);
+        var bundles = Bundles();
+        var chats = _chats;
+
+        _invalid = [];
+        var resumed = Bootstrap("--resume");
+
+        Assert.Equal(ExitCodes.Success, resumed.ExitCode);
+        // Only the failed target is generated again; the five valid ones are reused, not duplicated.
+        Assert.Equal(chats + 1, _chats);
+        Assert.Equal(Methods - 1, (int)resumed.Json["result"]!["resumed"]!);
+        // The failed attempt's bundle is kept for diagnosis; every target has exactly one valid proposal.
+        Assert.Equal(bundles.Length + 1, Bundles().Length);
+        var valid = Bundles()
+            .Select(b => JsonNode.Parse(File.ReadAllText(Path.Combine(_output, b, "manifest.json")))!)
+            .Where(m => (bool)m["valid"]!)
+            .GroupBy(m => (string)m["target"]!["id"]!)
+            .ToList();
+        Assert.Equal(Methods, valid.Count);
+        Assert.All(valid, g => Assert.Single(g));
+    }
+
+    [Fact]
+    public void ResumeAfterASourceChange_IsRefusedInsteadOfSilentlySkipping()
+    {
+        Assert.Equal(ExitCodes.Success, Bootstrap().ExitCode);
+        var chats = _chats;
+        Write("src/App/Maths.cs", File.ReadAllText(Path.Combine(_repo, "src/App/Maths.cs"))
+            .Replace("public int M3() => 3;", "public int M3() => 30;", StringComparison.Ordinal));
+
+        var (exit, json, _, _) = Bootstrap("--resume");
+
+        Assert.NotEqual(ExitCodes.Success, exit);
+        Assert.StartsWith("bootstrap.", (string?)json["error"]!["code"], StringComparison.Ordinal);
+        Assert.Equal(chats, _chats);
+    }
+
     // ---- #99 circuit breaker ----
 
     [Fact]
