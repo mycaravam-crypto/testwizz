@@ -60,7 +60,8 @@ public sealed class RepairLoop(DotNetTestRunner runner, Func<ModelClient>? clien
                 RepairProposal repair;
                 try
                 {
-                    repair = await XUnitRepairer.RepairAsync(client, context, proposal, output.Result, rejections, cancellationToken).ConfigureAwait(false);
+                    var access = MemberAccess.PromptLines(MemberAccess.Describe(provider, context, XUnitConventions.Detect(root, context)));
+                    repair = await XUnitRepairer.RepairAsync(client, context, proposal, output.Result, rejections, cancellationToken, access).ConfigureAwait(false);
                 }
                 catch (ModelClientException ex)
                 {
@@ -141,7 +142,8 @@ public sealed class RepairLoop(DotNetTestRunner runner, Func<ModelClient>? clien
             Namespace = (string?)recorded["namespace"] ?? "",
         };
         var scenarioIds = (proposal.Manifest["scenarios"] as JsonArray ?? []).Select(s => (string?)s?["id"]).OfType<string>().ToList();
-        var (tests, validation) = XUnitValidator.Validate(provider, code, path, conventions, scenarioIds);
+        var internals = MemberAccess.InternalsVisible(provider, context.Project, conventions.TestProject);
+        var (tests, validation) = XUnitValidator.Validate(provider, code, path, conventions, scenarioIds, internals);
         var findings = new List<GenerationFinding>(conventions.Findings);
         findings.AddRange(validation);
         findings.AddRange(ProposalChecks.Check(root, [new GeneratedFile(path, code)], tests));

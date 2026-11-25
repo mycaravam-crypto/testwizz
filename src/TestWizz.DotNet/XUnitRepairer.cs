@@ -78,12 +78,13 @@ public static class XUnitRepairer
     public static string PromptSha256 { get; } =
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(PromptTemplate + "\n" + SystemPrompt + "\n" + Schema.ToJsonString())));
 
-    public static JsonChatRequest BuildRequest(ContextDocument context, LoadedProposal proposal, RunResult run, IReadOnlyList<string> rejectedBecause)
+    public static JsonChatRequest BuildRequest(
+        ContextDocument context, LoadedProposal proposal, RunResult run, IReadOnlyList<string> rejectedBecause, IReadOnlyList<string>? access = null)
     {
         var file = proposal.Files[0];
         var user = new StringBuilder();
         user.Append("Repair the test file described in the data below.\n\n").Append(PromptData.Begin).Append('\n');
-        XUnitGenerator.AppendCodeUnderTest(user, context);
+        XUnitGenerator.AppendCodeUnderTest(user, context, access);
 
         user.Append("\n## Test file ").Append(Clean(file.Path)).Append("\n```csharp\n").Append(Clean(file.Content)).Append("```\n");
 
@@ -125,10 +126,11 @@ public static class XUnitRepairer
     }
 
     public static async Task<RepairProposal> RepairAsync(
-        ModelClient client, ContextDocument context, LoadedProposal proposal, RunResult run, IReadOnlyList<string> rejectedBecause, CancellationToken cancellationToken)
+        ModelClient client, ContextDocument context, LoadedProposal proposal, RunResult run, IReadOnlyList<string> rejectedBecause,
+        CancellationToken cancellationToken, IReadOnlyList<string>? access = null)
     {
-        var response = await client.CompleteJsonAsync(BuildRequest(context, proposal, run, rejectedBecause), cancellationToken).ConfigureAwait(false);
-        var code = response.Content["code"]!.GetValue<string>().ReplaceLineEndings("\n").TrimEnd() + "\n";
+        var response = await client.CompleteJsonAsync(BuildRequest(context, proposal, run, rejectedBecause, access), cancellationToken).ConfigureAwait(false);
+        var code = ModelSource.Normalize(response.Content["code"]!.GetValue<string>()).Code;
         var changes = response.Content["changes"]!.AsArray().Select(c => c?.GetValue<string>().Trim() ?? "").Where(c => c.Length > 0).ToList();
         var bugs = response.Content["suspectedBugs"]!.AsArray().OfType<JsonObject>()
             .Select(b => ((string?)b["test"] ?? "", (string?)b["reason"] ?? ""))
