@@ -19,6 +19,11 @@ public static class BootstrapCommand
     private const string CheckpointSchema = "testwizz.bootstrap-checkpoint/v1";
     private const int DefaultRetries = 2;
     private const int MaxRetries = 5;
+    private const string LimitOption = "--limit";
+    private const int MaxLimit = 100_000;
+    private const string MaxFailureRateOption = "--max-failure-rate";
+    private const string FailureSampleOption = "--failure-sample";
+    private const int DefaultFailureSample = 10;
 
     /// <summary>Base delay before the first retry; doubles per attempt and is capped at 30 seconds.</summary>
     private static readonly TimeSpan DefaultRetryDelay = TimeSpan.FromSeconds(2);
@@ -29,7 +34,7 @@ public static class BootstrapCommand
     public static CommandDefinition Definition { get; } = new(
         "bootstrap",
         "Discover all eligible C# methods, generate test proposals and optionally run them in isolated containers. Never applies changes.",
-        "testwizz bootstrap [path] --all [--review] [--generate-only] [--resume | --restart] [--retries <n>] [--max-workers <n>] [--verify-workers <n>] [--out <dir>]",
+        "testwizz bootstrap [path] --all [--review] [--generate-only] [--resume | --restart] [--limit <n>] [--max-failure-rate <percent> [--failure-sample <n>]] [--retries <n>] [--max-workers <n>] [--verify-workers <n>] [--out <dir>]",
         Options:
         [
             new("--all", "Discover and process all eligible C# methods."),
@@ -43,6 +48,9 @@ public static class BootstrapCommand
             new("--max-workers", "Model concurrency (1-8); default adaptive 1..4, explicit N uses N.", "n"),
             new("--verify-workers", "Maximum parallel isolated container test runs (1-4; default 1).", "n"),
             new("--progress-jsonl", "Emit structured bootstrap progress events on stderr."),
+            new(LimitOption, $"Process only the first n discovered targets in discovery order (1-{MaxLimit}; default: all). Part of the resume fingerprint.", "n"),
+            new(MaxFailureRateOption, "Stop scheduling new generations once more than this percentage of this run's generations failed (0-99; default: off). In-flight work finishes and is checkpointed; --resume continues.", "percent"),
+            new(FailureSampleOption, $"Generations this run must finish before --max-failure-rate can stop it (1-1000; default {DefaultFailureSample}).", "n"),
         ],
         MaxArguments: 1,
         Handler: Run);
@@ -67,6 +75,28 @@ public static class BootstrapCommand
             throw new CliException("usage", $"--retries must be between 0 and {MaxRetries}.");
         if (!context.Has("--all"))
             throw new CliException("usage", "bootstrap currently requires --all.");
+        int? limit = null;
+        if (context.Options.TryGetValue(LimitOption, out var limitText))
+        {
+            if (!int.TryParse(limitText, NumberStyles.None, CultureInfo.InvariantCulture, out var parsedLimit) || parsedLimit is < 1 or > MaxLimit)
+                throw new CliException("usage", $"{LimitOption} must be a whole number between 1 and {MaxLimit}.");
+            limit = parsedLimit;
+        }
+        int? maxFailureRate = null;
+        if (context.Options.TryGetValue(MaxFailureRateOption, out var rateText))
+        {
+            if (!int.TryParse(rateText, NumberStyles.None, CultureInfo.InvariantCulture, out var parsedRate) || parsedRate is < 0 or > 99)
+                throw new CliException("usage", $"{MaxFailureRateOption} must be a whole percentage between 0 and 99.");
+            maxFailureRate = parsedRate;
+        }
+        var failureSample = DefaultFailureSample;
+        if (context.Options.TryGetValue(FailureSampleOption, out var sampleText))
+        {
+            if (maxFailureRate is null)
+                throw new CliException("usage", $"{FailureSampleOption} requires {MaxFailureRateOption}.");
+            if (!int.TryParse(sampleText, NumberStyles.None, CultureInfo.InvariantCulture, out failureSample) || failureSample is < 1 or > 1000)
+                throw new CliException("usage", $"{FailureSampleOption} must be between 1 and 1000.");
+        }
         var resume = context.Has("--resume");
         var restart = context.Has("--restart");
         if (resume && restart)
@@ -98,6 +128,11 @@ public static class BootstrapCommand
                 progress.Update(done, "Scanning source files");
             }, context.CancellationToken).ToArray();
         context.CancellationToken.ThrowIfCancellationRequested();
+        // Discovery order is deterministic (ordinal file order, then declaration order), so a limit always selects
+        // the same targets for unchanged sources. The selection is part of the fingerprint below.
+        var discovered = targets.Length;
+        if (limit is { } take && take < targets.Length)
+            targets = targets[..take];
         progress.Stage("configure", 0, detail: "Loading configuration");
         var config = ConfigCommand.Load(Path.Combine(root, TestWizzConfig.FileName));
         var outputDirectory = context.Options.TryGetValue("--out", out var custom) && !string.IsNullOrWhiteSpace(custom)
@@ -245,6 +280,19 @@ public static class BootstrapCommand
         }
 
         var verifiedResults = new Dictionary<string, BootstrapVerified>(StringComparer.Ordinal);
+        // Opt-in circuit breaker (#99): only generations finished in this run count, restored ones do not.
+        string? breakerReason = null;
+        double? breakerRate = null;
+        void CheckBreaker()
+        {
+            if (maxFailureRate is not { } threshold || breakerReason is not null) return;
+            var sample = counts.Generated + counts.Failed;
+            if (sample < failureSample || counts.Failed * 100 <= threshold * sample) return;
+            breakerRate = Math.Round(100.0 * counts.Failed / sample, 1);
+            breakerReason = string.Create(CultureInfo.InvariantCulture,
+                $"{counts.Failed} of {sample} generations failed ({breakerRate:0.#}%), above {MaxFailureRateOption} {threshold}%; no new generations were scheduled. Finished work is checkpointed; fix the cause and continue with --resume.");
+            progress.Failure("bootstrap stopped: " + breakerReason);
+        }
         var verificationClock = new Stopwatch();
         var generated = 0;
         var generationFinished = false;
@@ -281,6 +329,7 @@ public static class BootstrapCommand
                 // Persist each finished LLM request before the next one is dispatched.
                 SaveState();
                 counts.Record(item.Generation == "ok");
+                CheckBreaker();
                 if (!fixedWorkers) adaptive.Completed(generationClock.Elapsed);
                 if (item.Diagnostics.Length > 0) progress.Diagnostics(item.Diagnostics);
                 if (item.Failure is { } failure) ReportFailure(progress, "generation", item.Target, failure, item.Proposal);
@@ -326,8 +375,10 @@ public static class BootstrapCommand
                   (verifying > 0 ? $" and {verifying} isolated test run(s)" : "") + $" · {counts.Detail()}",
                 generationFinished ? verifying : generating),
             context.CancellationToken,
-            () => fixedWorkers ? maxWorkers : adaptive.Current).GetAwaiter().GetResult();
+            () => fixedWorkers ? maxWorkers : adaptive.Current,
+            () => breakerReason is not null).GetAwaiter().GetResult();
         verificationClock.Stop();
+        if (!generationFinished) FinishGeneration();
 
         // Aggregate in source order, independent of concurrent completion order.
         foreach (var target in targets)
@@ -341,7 +392,22 @@ public static class BootstrapCommand
                     (string?)restored["execution"] ?? "not-run", (string?)restored["proposal"]);
                 continue;
             }
-            var result = verifiedResults[target];
+            if (!verifiedResults.TryGetValue(target, out var result))
+            {
+                // Never dispatched because the circuit breaker stopped scheduling; not checkpointed, so --resume runs it.
+                skipped++;
+                rows.Add(new JsonObject
+                {
+                    ["target"] = target,
+                    ["generation"] = "skipped",
+                    ["execution"] = "not-run",
+                    ["proposal"] = null,
+                    ["error"] = "bootstrap.circuit_open: not scheduled after the failure-rate limit was reached",
+                });
+                AppendRow(text, target, "skipped", "not-run", null);
+                continue;
+            }
+
             if (result.Generation == "ok" && result.Execution is "passed" or "not-run") succeeded++;
             else failed++;
             rows.Add(checkpointItems[target].DeepClone());
@@ -353,14 +419,36 @@ public static class BootstrapCommand
         text.Append(CultureInfo.InvariantCulture, $"\n{targets.Length} targets; {succeeded} successful, {failed} failed, {skipped} skipped. ");
         text.Append(CultureInfo.InvariantCulture, $"Generation: {counts.Valid} valid ({counts.Recovered} recovered, {counts.Completed} already complete), {counts.Failed} failed. ");
         text.Append(CultureInfo.InvariantCulture, $"Execution: {execution.Passed} passed, {execution.Failed} failed, {execution.Errors} errors, {execution.NotRun} not run. ");
+        var metrics = Metrics(counts, generationClock.Elapsed, verifiedResults.Values);
         text.Append("Proposals remain outside the repository; nothing was applied.\n");
+        if (discovered != targets.Length)
+            text.Append(CultureInfo.InvariantCulture, $"Selection: {targets.Length} of {discovered} discovered targets ({LimitOption} {limit}).\n");
+        text.Append(MetricsText(metrics));
+        if (breakerReason is not null)
+            text.Append("Stopped early: ").Append(breakerReason).Append('\n');
         ProgressEvent(context, "finished", targets.Length, targets.Length, null, failed == 0 ? "ok" : "failed", clock.Elapsed, counts, execution: execution);
         progress.Finish(targets.Length, failed, skipped, $"{succeeded} successful · {execution.Passed} passed · {execution.Failed + execution.Errors} execution issue(s)");
         context.Output.Result("bootstrap", new JsonObject
         {
             ["schema"] = "testwizz.bootstrap/v1",
             ["total"] = targets.Length,
-            ["eligible"] = targets.Length,
+            ["eligible"] = discovered,
+            ["selection"] = new JsonObject
+            {
+                ["discovered"] = discovered,
+                ["selected"] = targets.Length,
+                ["limit"] = limit,
+            },
+            ["circuitBreaker"] = maxFailureRate is null ? null : new JsonObject
+            {
+                ["maxFailureRatePercent"] = maxFailureRate,
+                ["minimumSample"] = failureSample,
+                ["tripped"] = breakerReason is not null,
+                ["failureRatePercent"] = breakerRate,
+                ["reason"] = breakerReason,
+                ["notScheduled"] = skipped,
+            },
+            ["metrics"] = metrics,
             ["resumed"] = completed.Count,
             ["recovered"] = recovered.Count,
             ["generationWorkersMax"] = maxWorkers,
@@ -383,6 +471,61 @@ public static class BootstrapCommand
             ["items"] = rows,
         }, text.ToString(), failed == 0 && skipped == 0 ? "ok" : "failed");
         return failed == 0 && skipped == 0 ? ExitCodes.Success : ExitCodes.ValidationFailed;
+    }
+
+    /// <summary>
+    /// Aggregate quality metrics of this run (#100). Rates and throughput cover only generations finished in this
+    /// run: proposals restored from a checkpoint (completed or recovered) are excluded and counted separately.
+    /// <c>validProposalsPerMinute</c> is new valid proposals per minute of generation wall-clock time (first model
+    /// request to last generation result, including time overlapping with verification). Failure codes are counted,
+    /// never failure messages, so no source text or credentials can appear here.
+    /// </summary>
+    private static JsonObject Metrics(GenerationCounts counts, TimeSpan generation, IEnumerable<BootstrapVerified> results)
+    {
+        var finished = counts.Generated + counts.Failed;
+        var minutes = generation.TotalMinutes;
+        JsonObject ByCode(IEnumerable<BatchFailure> failures) => new([.. failures
+            .GroupBy(f => f.Code, StringComparer.Ordinal)
+            .OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal)
+            .Select(g => KeyValuePair.Create(g.Key, (JsonNode?)g.Count()))]);
+        var list = results.ToList();
+        return new JsonObject
+        {
+            ["generationFinished"] = finished,
+            ["generationValid"] = counts.Generated,
+            ["generationFailed"] = counts.Failed,
+            ["restoredExcluded"] = counts.Completed + counts.Recovered,
+            ["generationSuccessRate"] = finished == 0 ? null : Math.Round((double)counts.Generated / finished, 3),
+            ["generationSeconds"] = Math.Round(generation.TotalSeconds, 1),
+            ["validProposalsPerMinute"] = finished == 0 || minutes <= 0 ? null : Math.Round(counts.Generated / minutes, 2),
+            ["failuresByCode"] = new JsonObject
+            {
+                ["generation"] = ByCode(list.Where(r => r.Generation != "ok" && r.Failure is not null).Select(r => r.Failure!)),
+                ["execution"] = ByCode(list.Where(r => r.Generation == "ok" && r.Execution is "failed" or "error" && r.Failure is not null).Select(r => r.Failure!)),
+            },
+        };
+    }
+
+    private static string MetricsText(JsonObject metrics)
+    {
+        var text = new StringBuilder();
+        if ((int)metrics["generationFinished"]! > 0)
+        {
+            text.Append(CultureInfo.InvariantCulture,
+                $"Metrics (this run, {(int)metrics["restoredExcluded"]!} restored excluded): {(double)metrics["generationSuccessRate"]! * 100:0.#}% generation success, ");
+            text.Append(metrics["validProposalsPerMinute"] is { } rate
+                ? string.Create(CultureInfo.InvariantCulture, $"{(double)rate:0.##} valid proposals/min over {(double)metrics["generationSeconds"]!:0.#} s of generation.\n")
+                : "no generation time measured.\n");
+        }
+
+        foreach (var phase in new[] { "generation", "execution" })
+        {
+            var codes = metrics["failuresByCode"]![phase]!.AsObject();
+            if (codes.Count > 0)
+                text.Append(CultureInfo.InvariantCulture, $"{char.ToUpperInvariant(phase[0])}{phase[1..]} failures by code: {string.Join(", ", codes.Select(c => $"{c.Key} ×{(int)c.Value!}"))}.\n");
+        }
+
+        return text.ToString();
     }
 
     /// <summary>
