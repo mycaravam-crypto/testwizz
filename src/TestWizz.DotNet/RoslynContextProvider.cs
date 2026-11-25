@@ -212,17 +212,21 @@ public sealed class RoslynContextProvider
             .Where(c => c.Id == text || (c.Names.Contains(name, StringComparer.Ordinal) && (parameters is null || c.Parameters == parameters)))
             .ToList();
 
-        if (matches.Count == 1)
+        // One symbol can be declared more than once (partial types and methods, or a file the compilation sees twice);
+        // those are the same target, not an ambiguity.
+        var symbols = matches.GroupBy(m => m.Id.Length > 0 ? m.Id : $"{m.File.Path}:{m.Node.SpanStart}", StringComparer.Ordinal).ToList();
+        if (symbols.Count == 1)
         {
-            return matches[0];
+            return symbols[0].OrderByDescending(HasBody).ThenBy(m => m.File.Path, StringComparer.Ordinal).First();
         }
 
-        if (matches.Count > 1)
+        if (symbols.Count > 1)
         {
+            var candidates = Candidates(symbols.Select(g => g.OrderByDescending(HasBody).First()).ToList());
             throw new ContextException(
                 "target.ambiguous",
-                $"'{target}' matches {matches.Count} symbols. Pass one of the candidates.",
-                [.. matches.Select(m => m.Display).Distinct(StringComparer.Ordinal)]);
+                $"'{target}' matches {symbols.Count} symbols. Pass one of the candidates.",
+                candidates);
         }
 
         var simple = name[(name.LastIndexOf('.') + 1)..];
@@ -232,6 +236,35 @@ public sealed class RoslynContextProvider
             .Distinct(StringComparer.Ordinal)
             .Take(10);
         throw new ContextException("target.not_found", $"No C# type or method named '{target}' was found.", [.. similar]);
+    }
+
+    private static bool HasBody(Match match) =>
+        match.Node is not MethodDeclarationSyntax method || method.Body is not null || method.ExpressionBody is not null;
+
+    /// <summary>
+    /// One line per distinct symbol. The short form (<c>Calculator.Percentage(decimal, int)</c>) is kept while it is
+    /// unique; symbols that share it (same type name in different namespaces) are shown fully qualified with their
+    /// source location and the documentation id, which <c>--for</c> accepts as an exact target.
+    /// </summary>
+    private static List<string> Candidates(IReadOnlyList<Match> symbols)
+    {
+        var collisions = symbols.GroupBy(m => m.Display, StringComparer.Ordinal).Where(g => g.Count() > 1).Select(g => g.Key)
+            .ToHashSet(StringComparer.Ordinal);
+        return
+        [
+            .. symbols.Select(m =>
+            {
+                if (!collisions.Contains(m.Display))
+                {
+                    return m.Display;
+                }
+
+                var line = m.Node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+                var qualified = m.Parameters is null ? m.Names[0] : $"{m.Names[0]}{m.Display[m.Display.IndexOf('(', StringComparison.Ordinal)..]}";
+                return $"{qualified} ({m.File.Path}:{line}; --for \"{m.Id}\")";
+            })
+            .Order(StringComparer.Ordinal),
+        ];
     }
 
     private IEnumerable<Match> Candidates()

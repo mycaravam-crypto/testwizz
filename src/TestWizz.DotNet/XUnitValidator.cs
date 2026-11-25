@@ -65,6 +65,13 @@ public static class XUnitValidator
             findings.Add(GenerationFinding.Error("syntax-error", error.GetMessage(System.Globalization.CultureInfo.InvariantCulture), Line(error.Location)));
         }
 
+        if (ModelSource.StrayBackslashLines(code) is { Count: > 0 } stray)
+        {
+            findings.Add(GenerationFinding.Error("malformed-source",
+                $"Backslashes outside string literals on line(s) {string.Join(", ", stray.Take(10))}: the model output looks double-escaped or malformed. It was not changed, because decoding it would not produce valid C#.",
+                stray[0]));
+        }
+
         var classes = root.DescendantNodes().OfType<ClassDeclarationSyntax>().ToList();
         if (!classes.Any(c => c.Identifier.Text == conventions.ClassName))
         {
@@ -83,7 +90,14 @@ public static class XUnitValidator
 
             foreach (var unknown in linked.Where(id => !scenarioIds.Contains(id)))
             {
-                findings.Add(GenerationFinding.Error("unknown-scenario", $"{method.Identifier.Text} links to {unknown}, which is not in the plan.", line));
+                findings.Add(GenerationFinding.Error("unknown-scenario",
+                    $"{method.Identifier.Text} links to {unknown}, which is not in the plan (valid: {string.Join(", ", scenarioIds.Order(StringComparer.Ordinal))}).", line));
+            }
+
+            foreach (var opaque in OpaqueScenarioTraits(method))
+            {
+                findings.Add(GenerationFinding.Error("unverifiable-scenario-link",
+                    $"{method.Identifier.Text} has [Trait(\"Scenario\", {opaque})]; scenario ids must be string literals so the link can be checked.", line));
             }
 
             tests.Add(new GeneratedTest(method.Identifier.Text, line, linked, IsSkipped(method), Assertions(method)));
@@ -459,6 +473,13 @@ public static class XUnitValidator
             .Select(a => Literal(a.ArgumentList!.Arguments[1].Expression))
             .OfType<string>()
             .SelectMany(v => v.Split([',', ' '], StringSplitOptions.RemoveEmptyEntries));
+
+    /// <summary>Scenario traits whose value is not a string literal (a constant, nameof, interpolation): not checkable.</summary>
+    private static IEnumerable<string> OpaqueScenarioTraits(MethodDeclarationSyntax method) =>
+        method.AttributeLists.SelectMany(l => l.Attributes)
+            .Where(a => a.Name.ToString() is "Trait" or "Xunit.Trait" or "TraitAttribute" && a.ArgumentList?.Arguments.Count == 2)
+            .Where(a => Literal(a.ArgumentList!.Arguments[0].Expression) == "Scenario" && Literal(a.ArgumentList.Arguments[1].Expression) is null)
+            .Select(a => a.ArgumentList!.Arguments[1].Expression.ToString());
 
     private static string? Literal(ExpressionSyntax expression) =>
         expression is LiteralExpressionSyntax literal && literal.IsKind(SyntaxKind.StringLiteralExpression) ? literal.Token.ValueText : null;

@@ -128,7 +128,7 @@ public static class XUnitRepairer
         ModelClient client, ContextDocument context, LoadedProposal proposal, RunResult run, IReadOnlyList<string> rejectedBecause, CancellationToken cancellationToken)
     {
         var response = await client.CompleteJsonAsync(BuildRequest(context, proposal, run, rejectedBecause), cancellationToken).ConfigureAwait(false);
-        var code = response.Content["code"]!.GetValue<string>().ReplaceLineEndings("\n").TrimEnd() + "\n";
+        var code = ModelSource.Normalize(response.Content["code"]!.GetValue<string>()).Code;
         var changes = response.Content["changes"]!.AsArray().Select(c => c?.GetValue<string>().Trim() ?? "").Where(c => c.Length > 0).ToList();
         var bugs = response.Content["suspectedBugs"]!.AsArray().OfType<JsonObject>()
             .Select(b => ((string?)b["test"] ?? "", (string?)b["reason"] ?? ""))

@@ -16,7 +16,7 @@
     "model": "qwen2.5-coder:14b",
     "modelDigest": "sha256:abc123",
     "promptTemplate": "xunit/v1",
-    "promptSha256": "30b6f67ebe85568e424a12e52bf473c38a81f3157f836c1000c0822de030d7ca"
+    "promptSha256": "7f82b69c871f1e2832accb296586890cc19e85d09baadfe1841c114bde2fefad"
   },
   "conventions": {
     "targetProject": "src/Shop/Shop.csproj",

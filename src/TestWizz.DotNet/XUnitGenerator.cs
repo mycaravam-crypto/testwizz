@@ -30,8 +30,10 @@ public static class XUnitGenerator
         Write one complete C# file and return it in "code":
         - Use exactly the namespace and test class name given in the data, and only the packages listed there.
         - Write tests for the plan's scenarios. Mark every test method with [Trait("Scenario", "<id>")] for each scenario
-          it covers (one attribute per id). Use [Theory] with [InlineData] when several scenarios or boundary values
-          share one test shape.
+          it covers (one attribute per id, the id as a string literal). Use only the scenario ids listed in the test
+          plan; never invent new ids or new requirements. Use [Theory] with [InlineData] when several scenarios or
+          boundary values share one test shape. If a scenario cannot be tested through accessible members, write no
+          test for it and add an assumption "Untestable <id>: <reason>".
         - Test the behavior in each scenario's expected behavior. Call the code under test exactly as the signatures in
           the data show; do not invent constructors, methods, properties or types.
         - Replace constructor dependencies with the mocking library named in the data, or with small private fake
@@ -93,6 +95,8 @@ public static class XUnitGenerator
         AppendCodeUnderTest(user, context);
 
         user.Append("\n## Test plan\n");
+        user.Append("Valid scenario ids: ").Append(string.Join(", ", plan.Scenarios.Select(s => s.Id)))
+            .Append(" (link tests only to these)\n");
         foreach (var scenario in plan.Scenarios)
         {
             user.Append("- ").Append(scenario.Id).Append(" [").Append(ScenarioCategories.Name(scenario.Category)).Append("] ").Append(Clean(scenario.Title)).Append('\n');
@@ -157,48 +161,22 @@ public static class XUnitGenerator
     {
         var digest = await client.ModelDigestAsync(cancellationToken).ConfigureAwait(false);
         var response = await client.CompleteJsonAsync(BuildRequest(context, plan, conventions), cancellationToken).ConfigureAwait(false);
-        var code = NormalizeModelCode(response.Content["code"]!.GetValue<string>());
+        var normalized = ModelSource.Normalize(response.Content["code"]!.GetValue<string>());
         var assumptions = response.Content["assumptions"]!.AsArray()
             .Select(a => a?.GetValue<string>().Trim() ?? "")
             .Where(a => a.Length > 0)
             .ToList();
 
-        return Assemble(provider, context, plan, conventions, code, assumptions, new GenerationProvenance(
+        return Assemble(provider, context, plan, conventions, normalized.Code, assumptions, new GenerationProvenance(
             ConfigJson.ProviderName(client.Settings.Provider),
             client.Settings.Model,
             digest,
             PromptTemplate,
-            PromptSha256));
+            PromptSha256), normalized.Repair is { } repair ? [repair] : []);
     }
 
-    /// <summary>
-    /// Some models return C# with an extra JSON escaping layer inside the already decoded "code" string.
-    /// Only decode when the entire source resembles an escaped document, never individual C# strings.
-    /// </summary>
-    public static string NormalizeModelCode(string raw)
-    {
-        var code = raw.ReplaceLineEndings("\n").Trim();
-        if (!code.Contains('\n') && code.Contains(@"\n", StringComparison.Ordinal))
-        {
-            // A JSON string decoder handles escaped quotes, backslashes and newlines consistently.
-            // Avoid normalization of valid one-line C# source with an intentional \n literal.
-            try
-            {
-                var decoded = System.Text.Json.JsonSerializer.Deserialize<string>("\"" + code + "\"");
-                if (decoded is not null && decoded.Contains('\n') &&
-                    Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(decoded).GetDiagnostics()
-                        .Count(d => d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error) <
-                    Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(code).GetDiagnostics()
-                        .Count(d => d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error))
-                    code = decoded;
-            }
-            catch (System.Text.Json.JsonException)
-            {
-                // Leave malformed data unchanged so normal validation reports the source errors.
-            }
-        }
-        return code.TrimEnd() + "\n";
-    }
+    /// <summary>Decodes an extra escaping layer when that provably repairs the source; see <see cref="ModelSource"/>.</summary>
+    public static string NormalizeModelCode(string raw) => ModelSource.Normalize(raw).Code;
 
     /// <summary>Validates model output and packages it; separate from the model call so it can be tested directly.</summary>
     public static GenerationResult Assemble(
@@ -208,9 +186,11 @@ public static class XUnitGenerator
         XUnitConventions conventions,
         string code,
         IReadOnlyList<string> assumptions,
-        GenerationProvenance generator)
+        GenerationProvenance generator,
+        IReadOnlyList<GenerationFinding>? preprocessing = null)
     {
         var findings = new List<GenerationFinding>(conventions.Findings);
+        findings.AddRange(preprocessing ?? []);
         if (string.IsNullOrWhiteSpace(code))
         {
             findings.Add(GenerationFinding.Error("empty-code", "The model returned no code."));
