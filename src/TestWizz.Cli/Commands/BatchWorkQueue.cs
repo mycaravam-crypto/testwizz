@@ -97,7 +97,8 @@ internal static class BatchWorkQueue
         Action<TItem, TSecond, int> secondCompleted,
         Action<int, int>? heartbeat,
         CancellationToken cancellationToken,
-        Func<int>? desiredFirst = null)
+        Func<int>? desiredFirst = null,
+        Func<bool>? stopFirst = null)
     {
         if (maxFirst < 1 || maxFirst > 8)
             throw new ArgumentOutOfRangeException(nameof(maxFirst));
@@ -112,7 +113,8 @@ internal static class BatchWorkQueue
         void Fill()
         {
             var slots = Math.Clamp(desiredFirst?.Invoke() ?? maxFirst, 1, maxFirst);
-            while (next < items.Count && firstActive.Count < slots)
+            // A stop only prevents new first-stage work: in-flight items finish and are reported.
+            while (next < items.Count && firstActive.Count < slots && stopFirst?.Invoke() != true)
             {
                 var item = items[next++];
                 firstActive.Add(Task.Run(async () => (item, await first(item, cancellationToken).ConfigureAwait(false)), cancellationToken));

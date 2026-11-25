@@ -100,6 +100,15 @@ Bootstrap discovers public/internal/protected-internal C# methods with bodies, u
 
 **Failures are explained, not just counted.** Each failed target prints one sanitized stderr line with the phase, target, error code, message and proposal path, e.g. `generation failed for M:Shop.Forms.FormTypeExtensions.GetName(Shop.FormType): validation.missing-using: 'GetName' is an extension method ... · proposal <dir>`. The same reason is persisted in the checkpoint (`error` as `code: message`, plus `failure.code`/`failure.message`) and in the JSON result; `--progress-jsonl` events carry it as `error` instead of a text line. Messages are bounded, stripped of terminal control characters and redacted for tokens, keys, passwords, URL credentials and JWTs; stdout stays a single JSON document.
 
+**Controlled runs on large baselines.**
+
+- `--limit <n>` processes only the first *n* discovered targets, in the deterministic discovery order (files in ordinal order, then declaration order). The JSON result reports `selection.discovered`, `selection.selected` and `selection.limit`. The selection is part of the checkpoint fingerprint, so `--resume` needs the same limit; the default is all targets.
+- `--max-failure-rate <percent>` (opt-in, with `--failure-sample <n>`, default 10) stops *scheduling* new generations once more than that share of this run's finished generations failed. In-flight requests finish and are checkpointed, and the result reports `circuitBreaker.reason`. Unscheduled targets appear as `skipped` and are not checkpointed, so `--resume` continues with them.
+- Every result has `metrics`:
+  - `failuresByCode` for generation and execution (codes only, never messages);
+  - `generationSuccessRate` and `validProposalsPerMinute`, which cover only generations finished in this run. Restored checkpoint results are excluded and counted as `restoredExcluded`. Throughput uses the generation wall-clock time, including time overlapping with verification.
+  - The text summary shows the same figures.
+
 **Retries.** Transient model failures — timeouts, connection/DNS errors, empty or malformed responses and HTTP 408/425/429/5xx — are retried up to `--retries N` times per target (0-5, default 2) with exponential back-off starting at 2 s (capped at 30 s). Configuration, authorization, endpoint-policy, validation and cancellation failures are never retried, and every attempt goes through full validation, so a retry cannot turn an invalid proposal into an accepted one. Earlier attempts are kept in the checkpoint row's `attempts`. Cancellation (Ctrl+C) interrupts a back-off wait immediately; finished targets remain in the checkpoint for `--resume`.
 
 **Progress counts** distinguish generation and execution. Proposals restored from the checkpoint count as valid generations from the start; the generation phase shows `valid (restored) · failed · remaining`, and the result has `generation` (`valid`, `generated`, `recovered`, `completed`, `failed`, `remaining`) and `execution` (`passed`, `failed`, `error`, `notRun`) objects. `--progress-jsonl` events include the same `generation` counters (and `execution` during verification).
