@@ -50,11 +50,20 @@ public sealed record GenerationResult(
     public const string Schema = "testwizz.generation/v1";
 
     public bool IsValid => Findings.All(f => f.Severity != "error");
+
+    /// <summary>Every model attempt, the first one included; empty when no repair was configured or needed.</summary>
+    public IReadOnlyList<GenerationAttempt> Attempts { get; init; } = [];
 }
+
+/// <param name="Number">1 for the first generation, 2+ for repairs.</param>
+/// <param name="ErrorCodes">Distinct validation error codes of this attempt.</param>
+/// <param name="Kept">Whether this attempt became the result (fewer errors, no lost scenario coverage).</param>
+/// <param name="Reason">Why a repair was not kept, or why repairing stopped.</param>
+public sealed record GenerationAttempt(int Number, int Errors, IReadOnlyList<string> ErrorCodes, bool Kept, string? Reason = null);
 
 public static class GenerationJson
 {
-    public static JsonObject ToJson(GenerationResult r) => new()
+    public static JsonObject ToJson(GenerationResult r) => new JsonObject
     {
         ["schema"] = GenerationResult.Schema,
         ["stack"] = r.Stack,
@@ -74,7 +83,27 @@ public static class GenerationJson
         ["tests"] = new JsonArray([.. r.Tests.Select(t => (JsonNode)ToJson(t))]),
         ["assumptions"] = new JsonArray([.. r.Assumptions.Select(a => (JsonNode)a)]),
         ["findings"] = new JsonArray([.. r.Findings.Select(f => (JsonNode)ToJson(f))]),
-    };
+    }.WithAttempts(r.Attempts);
+
+    private static JsonObject WithAttempts(this JsonObject json, IReadOnlyList<GenerationAttempt> attempts)
+    {
+        if (attempts.Count > 0)
+        {
+            json["generationAttempts"] = AttemptsJson(attempts);
+        }
+
+        return json;
+    }
+
+    public static JsonArray AttemptsJson(IReadOnlyList<GenerationAttempt> attempts) =>
+        new([.. attempts.Select(a => (JsonNode)new JsonObject
+        {
+            ["number"] = a.Number,
+            ["errors"] = a.Errors,
+            ["errorCodes"] = new JsonArray([.. a.ErrorCodes.Select(c => (JsonNode)c)]),
+            ["kept"] = a.Kept,
+            ["reason"] = a.Reason,
+        })]);
 
     public static JsonObject ToJson(GeneratedTest t) => new()
     {

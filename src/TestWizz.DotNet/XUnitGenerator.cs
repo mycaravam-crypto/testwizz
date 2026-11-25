@@ -164,29 +164,121 @@ public static class XUnitGenerator
         }
     }
 
+    /// <summary>Findings the model cannot fix by rewriting the test file (project setup, proposal paths).</summary>
+    private static readonly HashSet<string> NotRepairable = new(StringComparer.Ordinal)
+    {
+        "empty-code", "file-exists", "path-escape", "unsafe-path", "duplicate-path", "unsupported-framework",
+        "no-test-project", "no-xunit-reference",
+    };
+
+    /// <param name="maxRepairs">
+    /// How often invalid output may be sent back with its validation errors (#89). Each attempt is validated again and
+    /// kept only when it has fewer errors and still covers every scenario the kept attempt covered. Nothing is built
+    /// or run; the attempts are recorded in the result.
+    /// </param>
     public static async Task<GenerationResult> GenerateAsync(
         ModelClient client,
         RoslynContextProvider provider,
         ContextDocument context,
         PlanDocument plan,
         XUnitConventions conventions,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int maxRepairs = 0)
     {
         var digest = await client.ModelDigestAsync(cancellationToken).ConfigureAwait(false);
         var access = MemberAccess.PromptLines(MemberAccess.Describe(provider, context, conventions));
-        var response = await client.CompleteJsonAsync(BuildRequest(context, plan, conventions, access), cancellationToken).ConfigureAwait(false);
-        var normalized = ModelSource.Normalize(response.Content["code"]!.GetValue<string>());
-        var assumptions = response.Content["assumptions"]!.AsArray()
-            .Select(a => a?.GetValue<string>().Trim() ?? "")
-            .Where(a => a.Length > 0)
-            .ToList();
-
-        return Assemble(provider, context, plan, conventions, normalized.Code, assumptions, new GenerationProvenance(
+        var request = BuildRequest(context, plan, conventions, access);
+        var provenance = new GenerationProvenance(
             ConfigJson.ProviderName(client.Settings.Provider),
             client.Settings.Model,
             digest,
             PromptTemplate,
-            PromptSha256), normalized.Repair is { } repair ? [repair] : []);
+            PromptSha256);
+
+        var best = await AttemptAsync(request).ConfigureAwait(false);
+        var kept = 1;
+        var attempts = new List<GenerationAttempt> { Summary(1, best) };
+        for (var number = 2; number <= maxRepairs + 1 && !best.IsValid; number++)
+        {
+            var fixable = Errors(best).Where(f => !NotRepairable.Contains(f.Code)).ToList();
+            // Assemble always produces one file; without one there is nothing to send back for repair.
+            if (fixable.Count == 0 || best.Files.Count == 0)
+            {
+                attempts[^1] = attempts[^1] with { Reason = "remaining errors cannot be fixed by rewriting the test file" };
+                break;
+            }
+
+            GenerationResult candidate;
+            try
+            {
+                candidate = await AttemptAsync(BuildFixRequest(request, best.Files[0].Content, fixable)).ConfigureAwait(false);
+            }
+            catch (ModelClientException ex)
+            {
+                attempts.Add(new GenerationAttempt(number, 0, [], Kept: false, $"model call failed ({ex.Code}); the previous attempt is kept"));
+                break;
+            }
+
+            var lost = Covered(best, plan).Except(Covered(candidate, plan), StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+            var reason = lost.Count > 0 ? $"drops coverage of {string.Join(", ", lost)}"
+                : Errors(candidate).Count >= Errors(best).Count ? "does not reduce the validation errors"
+                : null;
+            attempts.Add(Summary(number, candidate) with { Reason = reason });
+            if (reason is null)
+            {
+                best = candidate;
+                kept = number;
+            }
+        }
+
+        return attempts.Count > 1 ? best with { Attempts = [.. attempts.Select(a => a with { Kept = a.Number == kept })] } : best;
+
+        async Task<GenerationResult> AttemptAsync(JsonChatRequest chat)
+        {
+            var response = await client.CompleteJsonAsync(chat, cancellationToken).ConfigureAwait(false);
+            var normalized = ModelSource.Normalize(response.Content["code"]!.GetValue<string>());
+            var assumptions = response.Content["assumptions"]!.AsArray()
+                .Select(a => a?.GetValue<string>().Trim() ?? "")
+                .Where(a => a.Length > 0)
+                .ToList();
+            return Assemble(provider, context, plan, conventions, normalized.Code, assumptions, provenance,
+                normalized.Repair is { } repair ? [repair] : []);
+        }
+    }
+
+    private static List<GenerationFinding> Errors(GenerationResult result) => [.. result.Findings.Where(f => f.Severity == "error")];
+
+    /// <summary>Plan scenarios the result's tests link to; links to ids outside the plan are errors, not coverage.</summary>
+    private static HashSet<string> Covered(GenerationResult result, PlanDocument plan) =>
+        result.Tests.SelectMany(t => t.Scenarios).Intersect(plan.Scenarios.Select(s => s.Id), StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
+
+    private static GenerationAttempt Summary(int number, GenerationResult result)
+    {
+        var errors = Errors(result);
+        return new GenerationAttempt(number, errors.Count, [.. errors.Select(e => e.Code).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)], Kept: false);
+    }
+
+    /// <summary>
+    /// The original request plus the invalid file and its validation errors, as data inside the same data block.
+    /// The rules (system prompt and schema) are unchanged, so the model may not add scenarios or requirements.
+    /// </summary>
+    internal static JsonChatRequest BuildFixRequest(JsonChatRequest original, string previousCode, IReadOnlyList<GenerationFinding> errors)
+    {
+        var data = original.User;
+        var end = data.LastIndexOf(PromptData.End, StringComparison.Ordinal);
+        var fix = new StringBuilder();
+        fix.Append("\n## Previous attempt (failed validation)\n```csharp\n").Append(Clean(previousCode)).Append("```\n");
+        fix.Append("\n## Validation errors to fix\n");
+        foreach (var error in errors.Take(25))
+        {
+            fix.Append("- ").Append(error.Line is { } line ? $"line {line.ToString(System.Globalization.CultureInfo.InvariantCulture)}: " : "")
+                .Append(error.Code).Append(": ").Append(Clean(error.Message)).Append('\n');
+        }
+
+        var user = "Write the test file described in the data below again. The previous attempt failed validation: fix every "
+            + "listed error, keep the tests and scenario links that were valid, and do not add scenarios or requirements.\n\n"
+            + data[(data.IndexOf(PromptData.Begin, StringComparison.Ordinal))..end] + fix + data[end..];
+        return original with { User = user };
     }
 
     /// <summary>Decodes an extra escaping layer when that provably repairs the source; see <see cref="ModelSource"/>.</summary>

@@ -184,6 +184,7 @@ ai:
   apiKeyEnv: null
   timeoutSeconds: 120
   maxContextTokens: 16000
+  maxGenerationRepairs: 1
 run:
   runtime: docker
   maxRepairAttempts: 2
@@ -197,6 +198,7 @@ Previously generated `testwizz.json` files remain valid without conversion. If b
 - `ai.apiKeyEnv`: the *name* of an environment variable holding the key, never the key itself. `.env` files are not loaded.
   - For ordinary local Ollama, leave it `null` (no key required). For an authenticated local server, set it to e.g. `"TESTWIZZ_AI_API_KEY"`, then run `read -rsp 'Local AI API key: ' TESTWIZZ_AI_API_KEY; echo; export TESTWIZZ_AI_API_KEY` in Bash before `testwizz ai check .`.
   - See [Local AI providers and API keys](docs/ai-providers.md) for both configurations and security guidance.
+- `ai.maxGenerationRepairs` (0-5, default 1): how often `generate` (and `bootstrap`/`--all-changed`) may send static validation errors back to the model for a corrected file. Each attempt is validated again and kept only if it has fewer errors and still covers every plan scenario the kept attempt covered; nothing is built or run for this. Attempts are listed in the manifest as `generationAttempts` when a repair happened. Invalid proposals are never executed by `bootstrap`.
 - `run.runtime`: `docker` or `podman`. Generated tests only ever run inside a container.
 - `run.image` (optional): SDK image for restore, build and test, e.g. one that trusts your organization's approved CA. Omit it to use `mcr.microsoft.com/dotnet/sdk:<version>` from the target framework; `run --image` takes precedence. See [Corporate environments](docs/corporate-environments.md).
 - `output`: where proposals are written, relative to the config file. It defaults to a directory outside the repository.

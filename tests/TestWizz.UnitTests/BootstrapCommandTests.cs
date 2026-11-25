@@ -132,9 +132,27 @@ public sealed class BootstrapCommandTests : IAsyncLifetime
         Assert.StartsWith("validation.unknown-member: ", (string?)row["error"], StringComparison.Ordinal);
         Assert.Equal(1, (int)result["generation"]!["failed"]!);
         Assert.Equal(0, (int)result["generation"]!["valid"]!);
-        // Validation failures are never retried: one model call.
-        Assert.Equal(1, _chatRequests);
+        // Validation failures are not retried as transport failures; ai.maxGenerationRepairs (default 1) allows one
+        // repair call, which the persistently invalid model output does not fix.
+        Assert.Equal(2, _chatRequests);
         Assert.Null(row["attempts"]);
+    }
+
+    [Fact]
+    public void InvalidProposalAfterRepair_IsNeverExecuted()
+    {
+        Model(ValidTests.Replace("new Maths().One()", "new Maths().Two()", StringComparison.Ordinal));
+        var runtime = new FakeRuntime();
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+
+        var exit = new CliApp(stdout, stderr, _repo, name => name == "TESTWIZZ_RETRY_DELAY_MS" ? "0" : null, _ => runtime)
+            .Run(["bootstrap", "--all", "--format", "json"], TestContext.Current.CancellationToken);
+
+        Assert.Equal(ExitCodes.ValidationFailed, exit);
+        Assert.Equal(2, _chatRequests);
+        Assert.Empty(runtime.Runs);
+        Assert.Equal("not-run", (string?)JsonNode.Parse(stdout.ToString())!["result"]!["items"]!.AsArray().Single()!["execution"]);
     }
 
     [Fact]

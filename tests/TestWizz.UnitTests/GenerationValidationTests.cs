@@ -655,3 +655,155 @@ public sealed class GeneratedHelperTests : FixtureValidation
         Assert.DoesNotContain("unverified-fake", Codes(result));
     }
 }
+
+/// <summary>Bounded generation repair from validation feedback (#89): static only, traced, never loses coverage.</summary>
+public sealed class GenerationRepairTests : IAsyncLifetime
+{
+    private readonly string _fixture = RepoPaths.CopyToTemp(RepoPaths.DotNetFixture);
+    private readonly string _proposals = Directory.CreateTempSubdirectory("testwizz-proposals-").FullName;
+    private FakeModelServer _server = null!;
+
+    private static readonly string Invalid = CannedTests.Divide.Replace("[Trait(\"Scenario\", \"S2\")]", "[Trait(\"Scenario\", \"S9\")]", StringComparison.Ordinal);
+
+    public async ValueTask InitializeAsync() => _server = await FakeModelServer.StartAsync();
+
+    public async ValueTask DisposeAsync()
+    {
+        await _server.DisposeAsync();
+        TestTempDirectories.Delete(_fixture);
+        TestTempDirectories.Delete(_proposals);
+    }
+
+    private static string Reply(string code) => new System.Text.Json.Nodes.JsonObject
+    {
+        ["code"] = code,
+        ["assumptions"] = new System.Text.Json.Nodes.JsonArray(),
+    }.ToJsonString();
+
+    private async Task<TestWizz.Core.Generation.GenerationResult> Generate(int maxRepairs, params string[] codes)
+    {
+        _server.AsOllamaSequence("qwen2.5-coder:14b", [.. codes.Select(Reply)]);
+        var provider = RoslynContextProvider.Load(_fixture, TestContext.Current.CancellationToken);
+        var context = provider.GetContext("Calculator.Divide", "test");
+        var extractor = new CSharpScenarioExtractor();
+        var plan = TestWizz.Core.Planning.ScenarioPlanner.Create(context, extractor.Version, extractor.Extract(context));
+        using var client = TestWizz.AI.ModelClient.Create(TestSettings.Ollama(_server.BaseUri), _ => null);
+        return await XUnitGenerator.GenerateAsync(client, provider, context, plan, XUnitConventions.Detect(_fixture, context),
+            TestContext.Current.CancellationToken, maxRepairs);
+    }
+
+    private string[] ChatUsers() =>
+        [.. _server.Requests.Where(r => r.Path == "/api/chat").Select(r => (string)System.Text.Json.Nodes.JsonNode.Parse(r.Body)!["messages"]![1]!["content"]!)];
+
+    [Fact]
+    public async Task InvalidOutput_IsRepairedFromItsValidationErrors()
+    {
+        var result = await Generate(2, Invalid, CannedTests.Divide);
+
+        Assert.True(result.IsValid, string.Join("; ", result.Findings.Select(f => f.Message)));
+        Assert.Equal(2, ChatUsers().Length);
+        var fix = ChatUsers()[1];
+        Assert.Contains("## Validation errors to fix", fix, StringComparison.Ordinal);
+        Assert.Contains("unknown-scenario", fix, StringComparison.Ordinal);
+        Assert.Contains("[Trait(\"Scenario\", \"S9\")]", fix, StringComparison.Ordinal);
+        Assert.Contains("do not add scenarios or requirements", fix, StringComparison.Ordinal);
+        Assert.Contains("Valid scenario ids: S1, S2, S3", fix, StringComparison.Ordinal);
+        Assert.Collection(result.Attempts,
+            a =>
+            {
+                Assert.Equal((1, false), (a.Number, a.Kept));
+                Assert.Equal(["unknown-scenario"], a.ErrorCodes);
+            },
+            a => Assert.Equal((2, true, 0), (a.Number, a.Kept, a.Errors)));
+    }
+
+    [Fact]
+    public async Task PersistentFailure_StopsAtTheBoundAndStaysInvalid()
+    {
+        var result = await Generate(2, Invalid, Invalid, Invalid, CannedTests.Divide);
+
+        Assert.False(result.IsValid);
+        Assert.Equal(3, ChatUsers().Length);
+        Assert.Equal([1, 2, 3], result.Attempts.Select(a => a.Number));
+        Assert.True(result.Attempts[0].Kept);
+        Assert.All(result.Attempts.Skip(1), a => Assert.Equal("does not reduce the validation errors", a.Reason));
+    }
+
+    [Fact]
+    public async Task RepairThatDropsScenarioCoverage_IsNotKept()
+    {
+        // Valid, but it only covers S1: fewer errors must not cost traceability.
+        var onlyS1 = """
+            namespace Shop.Tests;
+
+            public class CalculatorDivideTests
+            {
+                private readonly Calculator _calculator = new();
+
+                [Fact]
+                [Trait("Scenario", "S1")]
+                public void Divide_ReturnsQuotient() => Assert.Equal(4, _calculator.Divide(8, 2));
+            }
+            """;
+
+        var result = await Generate(1, Invalid, onlyS1);
+
+        Assert.False(result.IsValid);
+        Assert.Equal("drops coverage of S3", result.Attempts[1].Reason);
+        Assert.True(result.Attempts[0].Kept);
+        Assert.Contains("S9", result.Files[0].Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ZeroRepairs_MakesOneCallAndRecordsNoAttempts()
+    {
+        var result = await Generate(0, Invalid, CannedTests.Divide);
+
+        Assert.False(result.IsValid);
+        Assert.Single(ChatUsers());
+        Assert.Empty(result.Attempts);
+    }
+
+    [Fact]
+    public async Task ValidFirstAttempt_MakesNoRepairCall()
+    {
+        var result = await Generate(3, CannedTests.Divide);
+
+        Assert.True(result.IsValid);
+        Assert.Single(ChatUsers());
+        Assert.Empty(result.Attempts);
+    }
+
+    [Fact]
+    public void GenerateCommand_RecordsTheAttemptsInTheManifest()
+    {
+        _server.AsOllamaSequence("qwen2.5-coder:14b", Reply(Invalid), Reply(CannedTests.Divide));
+        File.WriteAllText(Path.Combine(_fixture, "testwizz.json"), new System.Text.Json.Nodes.JsonObject
+        {
+            ["version"] = 1,
+            ["ai"] = new System.Text.Json.Nodes.JsonObject { ["endpoint"] = _server.BaseUri.ToString(), ["maxGenerationRepairs"] = 1 },
+            ["output"] = _proposals,
+        }.ToJsonString());
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+
+        var exit = new TestWizz.Cli.CliApp(stdout, stderr, _fixture, _ => null)
+            .Run(["generate", "--for", "Calculator.Divide", "--format", "json"], TestContext.Current.CancellationToken);
+
+        Assert.Equal(TestWizz.Cli.ExitCodes.Success, exit);
+        var attempts = System.Text.Json.Nodes.JsonNode.Parse(stdout.ToString())!["result"]!["generationAttempts"]!.AsArray();
+        Assert.Equal(2, attempts.Count);
+        Assert.True((bool)attempts[1]!["kept"]!);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(6)]
+    public void MaxGenerationRepairs_IsRangeChecked(int value) =>
+        Assert.Contains(TestWizz.Core.Configuration.ConfigJson.Parse($$"""{ "version": 1, "ai": { "maxGenerationRepairs": {{value}} } }""").Errors,
+            e => e.Path == "$.ai.maxGenerationRepairs");
+
+    [Fact]
+    public void MaxGenerationRepairs_DefaultsToOne() =>
+        Assert.Equal(1, TestWizz.Core.Configuration.ConfigJson.Parse("""{ "version": 1 }""").Config!.Ai.MaxGenerationRepairs);
+}

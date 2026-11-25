@@ -14,13 +14,21 @@ public enum ContainerRuntime
 
 /// <summary>Connection settings for the local model. Reachability and private-network checks happen when the client connects.</summary>
 /// <param name="ApiKeyEnv">Name of the environment variable holding the API key. The key itself is never stored in configuration.</param>
+/// <param name="MaxGenerationRepairs">
+/// How often <c>generate</c> may send static validation errors back to the model for a corrected file before the
+/// proposal is saved. Nothing is built or run for this; 0 turns it off.
+/// </param>
 public sealed record AiSettings(
     AiProvider Provider,
     Uri Endpoint,
     string Model,
     string? ApiKeyEnv,
     int TimeoutSeconds,
-    int MaxContextTokens);
+    int MaxContextTokens,
+    int MaxGenerationRepairs = AiSettings.DefaultGenerationRepairs)
+{
+    public const int DefaultGenerationRepairs = 1;
+}
 
 /// <param name="Image">
 /// Optional SDK image for restore, build and test (e.g. one that trusts a corporate CA). Null picks
