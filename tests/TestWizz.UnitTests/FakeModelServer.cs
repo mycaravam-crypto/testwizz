@@ -48,6 +48,11 @@ public sealed class FakeModelServer : IAsyncDisposable
         return server;
     }
 
+    private const string BodyKey = "testwizz.body";
+
+    /// <summary>The request body, which the server reads (and records) before a handler runs.</summary>
+    public static string Body(HttpContext context) => context.Items[BodyKey] as string ?? "";
+
     public FakeModelServer On(string route, Func<HttpContext, Task> handler)
     {
         _routes[route] = handler;
@@ -119,6 +124,7 @@ public sealed class FakeModelServer : IAsyncDisposable
         var body = await reader.ReadToEndAsync(context.RequestAborted);
         var route = $"{context.Request.Method} {context.Request.Path}";
         Requests.Enqueue(new RecordedRequest(context.Request.Method, context.Request.Path, context.Request.Headers.Authorization.FirstOrDefault(), body));
+        context.Items[BodyKey] = body;
         if (_routes.TryGetValue(route, out var handler))
         {
             await handler(context);
