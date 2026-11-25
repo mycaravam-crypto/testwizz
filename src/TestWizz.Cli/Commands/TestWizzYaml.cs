@@ -16,6 +16,7 @@ internal static class TestWizzYaml
           apiKeyEnv: null
           timeoutSeconds: 120
           maxContextTokens: 16000
+          maxGenerationRepairs: 1
         run:
           runtime: docker
           maxRepairAttempts: 2

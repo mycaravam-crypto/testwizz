@@ -163,7 +163,8 @@ public static class GenerateCommand
                 throw new CliException(blocking.Code, blocking.Message);
             }
 
-            result = XUnitGenerator.GenerateAsync(client, provider, document, plan, conventions, context.CancellationToken).GetAwaiter().GetResult();
+            result = XUnitGenerator.GenerateAsync(client, provider, document, plan, conventions, context.CancellationToken,
+                settings.MaxGenerationRepairs).GetAwaiter().GetResult();
         }
         catch (ContextException ex)
         {
@@ -396,6 +397,16 @@ public static class GenerateCommand
         foreach (var test in r.Tests)
         {
             text.Append(CultureInfo.InvariantCulture, $"  {test.Name} (line {test.Line}) -> {(test.Scenarios.Count == 0 ? "no scenario" : string.Join(", ", test.Scenarios))}\n");
+        }
+
+        if (r.Attempts.Count > 1)
+        {
+            text.Append("\nGeneration attempts (static validation only, nothing was run):\n");
+            foreach (var a in r.Attempts)
+            {
+                text.Append(CultureInfo.InvariantCulture,
+                    $"  {a.Number}: {a.Errors} error(s){(a.ErrorCodes.Count > 0 ? $" [{string.Join(", ", a.ErrorCodes)}]" : "")}{(a.Kept ? " · kept" : "")}{(a.Reason is null ? "" : $" · {a.Reason}")}\n");
+            }
         }
 
         if (r.Assumptions.Count > 0)

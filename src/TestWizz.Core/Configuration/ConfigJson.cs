@@ -108,6 +108,7 @@ public static partial class ConfigJson
             ["apiKeyEnv"] = config.Ai.ApiKeyEnv,
             ["timeoutSeconds"] = config.Ai.TimeoutSeconds,
             ["maxContextTokens"] = config.Ai.MaxContextTokens,
+            ["maxGenerationRepairs"] = config.Ai.MaxGenerationRepairs,
         },
         ["run"] = RunToJson(config.Run),
         ["output"] = config.Output,
@@ -161,9 +162,10 @@ public static partial class ConfigJson
 
         var timeout = reader.IntInRange("timeoutSeconds", MinTimeoutSeconds, MaxTimeoutSeconds) ?? defaults.TimeoutSeconds;
         var maxTokens = reader.IntInRange("maxContextTokens", MinContextTokens, MaxContextTokens) ?? defaults.MaxContextTokens;
+        var generationRepairs = reader.IntInRange("maxGenerationRepairs", 0, MaxRepairAttemptsLimit) ?? defaults.MaxGenerationRepairs;
 
         reader.RejectUnknown();
-        return new AiSettings(provider, endpoint, model, apiKeyEnv, timeout, maxTokens);
+        return new AiSettings(provider, endpoint, model, apiKeyEnv, timeout, maxTokens, generationRepairs);
     }
 
     private static RunSettings ReadRun(ObjectReader? reader, RunSettings defaults, List<ConfigError> errors)

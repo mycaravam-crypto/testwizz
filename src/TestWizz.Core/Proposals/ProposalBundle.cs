@@ -232,7 +232,7 @@ public static class ProposalBundle
             s => generation.Tests.Where(t => t.Scenarios.Contains(s.Id)).Select(t => t.Name).ToList(),
             StringComparer.Ordinal);
 
-        return new JsonObject
+        var manifest = new JsonObject
         {
             ["schema"] = Schema,
             ["valid"] = generation.IsValid,
@@ -264,6 +264,12 @@ public static class ProposalBundle
             ["assumptions"] = generationJson["assumptions"]!.DeepClone(),
             ["findings"] = generationJson["findings"]!.DeepClone(),
         };
+        if (generationJson["generationAttempts"] is { } attempts)
+        {
+            manifest["generationAttempts"] = attempts.DeepClone();
+        }
+
+        return manifest;
     }
 
     /// <summary>Repository files the proposal was derived from; <c>apply</c> refuses when any of them changed.</summary>
