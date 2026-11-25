@@ -146,12 +146,18 @@ public static class MemberAccess
             return true;
         }
 
-        if (targetProject is null)
+        // Only a plain repository-relative project path is read, never one that leaves the repository (also via links).
+        if (targetProject is null || !TestWizz.Core.Proposals.PathGuard.IsSafeRelative(targetProject))
         {
             return false;
         }
 
         var projectFile = Path.Combine(provider.Root, targetProject.Replace('/', Path.DirectorySeparatorChar));
+        if (!TestWizz.Core.Proposals.PathGuard.IsWithin(provider.Root, projectFile))
+        {
+            return false;
+        }
+
         try
         {
             var projectName = Path.GetFileNameWithoutExtension(projectFile);

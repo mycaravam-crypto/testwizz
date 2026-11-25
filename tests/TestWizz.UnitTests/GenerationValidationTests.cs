@@ -361,6 +361,36 @@ public sealed class MemberAccessTests : FixtureValidation
         Assert.Contains(report.Accessible, a => a.StartsWith("int Runs", StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData("../outside/Shop.csproj")]
+    [InlineData("/etc/Shop.csproj")]
+    [InlineData("src/../../Shop.csproj")]
+    public void ProjectPathOutsideTheRepository_IsNeverRead(string project)
+    {
+        var provider = RoslynContextProvider.Load(Fixture, TestContext.Current.CancellationToken);
+
+        Assert.False(MemberAccess.InternalsVisible(provider, project, "tests/Shop.Tests/Shop.Tests.csproj"));
+    }
+
+    [Fact]
+    public void ProjectLinkLeavingTheRepository_IsNeverRead()
+    {
+        var outside = Directory.CreateTempSubdirectory("testwizz-outside-").FullName;
+        try
+        {
+            File.WriteAllText(Path.Combine(outside, "Shop.csproj"),
+                """<Project><ItemGroup><InternalsVisibleTo Include="Shop.Tests" /></ItemGroup></Project>""");
+            Directory.CreateSymbolicLink(Path.Combine(Fixture, "linked"), outside);
+            var provider = RoslynContextProvider.Load(Fixture, TestContext.Current.CancellationToken);
+
+            Assert.False(MemberAccess.InternalsVisible(provider, "linked/Shop.csproj", "tests/Shop.Tests/Shop.Tests.csproj"));
+        }
+        finally
+        {
+            TestTempDirectories.Delete(outside);
+        }
+    }
+
     [Fact]
     public void Prompt_CarriesAccessibilityAndTheNoBypassRule()
     {
