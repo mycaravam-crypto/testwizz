@@ -38,7 +38,7 @@ testwizz config .
 testwizz ai check .
 ```
 
-Legacy `testwizz.json` remains supported, but `testwizz.yaml` takes precedence. Do not use `init --force` without backing up existing settings. See [configuration](../README.md#configuration) and [local-model authentication](ai-providers.md).
+Legacy `testwizz.json` remains supported, but `testwizz.yaml` takes precedence. Do not use `init --force` without backing up existing settings. See [configuration](configuration.md#configuration) and [local-model authentication](ai-providers.md).
 
 ## Generate and apply C# tests
 
@@ -51,7 +51,7 @@ git status --short
 dotnet test -c Release
 ```
 
-`bootstrap` generates C#/xUnit proposals and tests them in Docker/Podman; `--verified-only` copies only previously passing, unchanged proposals. Review added files before committing. Without a container, `bootstrap . --all --generate-only` makes **unverified** proposals instead. Use `bootstrap . --all --resume` to continue a scan with unchanged sources, configuration and scan mode. An existing checkpoint is never replaced silently: rerunning without `--resume` stops with `bootstrap.checkpoint_exists`; use `--restart` to start over or a different `--out`. Both generated proposals and test outcomes are checkpointed; pending tests are rerun without regenerating their proposals. For changed-code batches, use `testwizz generate . --since main --all-changed --resume` after an initial run. Proposals and checkpoints remain outside the repository. See [bootstrap](../README.md#initial-repository-baseline-experimental).
+`bootstrap` generates C#/xUnit proposals and tests them in Docker/Podman; `--verified-only` copies only previously passing, unchanged proposals. Review added files before committing. Without a container, `bootstrap . --all --generate-only` makes **unverified** proposals instead. Use `bootstrap . --all --resume` to continue a scan with unchanged sources, configuration and scan mode. An existing checkpoint is never replaced silently: rerunning without `--resume` stops with `bootstrap.checkpoint_exists`; use `--restart` to start over or a different `--out`. Both generated proposals and test outcomes are checkpointed; pending tests are rerun without regenerating their proposals. For changed-code batches, use `testwizz generate . --since main --all-changed --resume` after an initial run. Proposals and checkpoints remain outside the repository. See [bootstrap](bootstrap.md#initial-repository-baseline-experimental).
 
 Behind a TLS-inspecting corporate proxy, restore inside the container may not trust your organization's CA (`restore.tls_untrusted`). `testwizz preflight .` shows which stage fails. Build an approved CA-enabled SDK image and set `run.image`; see [Corporate environments](corporate-environments.md). Standard installations need no image or certificate settings.
 
