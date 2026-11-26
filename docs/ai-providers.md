@@ -105,4 +105,4 @@ tw ai check .
 
 These settings are for **TestWizz's local model**, not the separate `SMARTWIZZ_API_KEY` GitHub Actions secret used by SmartWizz review workflows.
 
-See [the README](../README.md#configuration) for all configuration properties and network restrictions.
+See [the README](configuration.md) for all configuration properties and network restrictions.
