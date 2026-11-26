@@ -94,4 +94,4 @@ DocWizz imports successful `testwizz.ui-evidence/v1` bundles and verifies screen
 - **Integrity:** Model output remains review-required; only separately approved steps may be used for browser capture.
 - **Availability:** Investigate skipped/failed items from the batch report; do not run state-changing journeys concurrently against shared test data.
 
-The earlier single-case form (`testwizz journey-draft . --url ... --workitem ... --plan ... --case ...`) remains available. For Playwright test proposals rather than user guides, see [README: UI proposals](../README.md#minimal-ui-test-proposals-experimental).
+The earlier single-case form (`testwizz journey-draft . --url ... --workitem ... --plan ... --case ...`) remains available. For Playwright test proposals rather than user guides, see [UI proposals](ui-proposals.md#minimal-ui-test-proposals-experimental).
